@@ -21,17 +21,17 @@ func TestDistributeTimesOrganicMonotonicityAndBounds(t *testing.T) {
 
 	DistributeTimes(commits, start, end)
 
-	if !commits[0].Timestamp.Equal(start) && !commits[0].Timestamp.After(start) {
-		t.Errorf("expected first commit on or after start, got %v", commits[0].Timestamp)
+	if !commits[len(commits)-1].Timestamp.Equal(start) && !commits[len(commits)-1].Timestamp.After(start) {
+		t.Errorf("expected last (oldest) commit on or after start, got %v", commits[len(commits)-1].Timestamp)
 	}
-	if commits[len(commits)-1].Timestamp.After(end) {
-		t.Errorf("expected last commit on or before end, got %v", commits[len(commits)-1].Timestamp)
+	if commits[0].Timestamp.After(end) {
+		t.Errorf("expected first (newest) commit on or before end, got %v", commits[0].Timestamp)
 	}
 
-	// Verify strict ascending order
+	// Verify strict descending order (newest-first)
 	for i := 0; i < len(commits)-1; i++ {
-		if !commits[i+1].Timestamp.After(commits[i].Timestamp) {
-			t.Errorf("commit %d timestamp (%v) is not before commit %d timestamp (%v)",
+		if !commits[i].Timestamp.After(commits[i+1].Timestamp) {
+			t.Errorf("commit %d timestamp (%v) is not after commit %d timestamp (%v)",
 				i, commits[i].Timestamp, i+1, commits[i+1].Timestamp)
 		}
 	}
@@ -56,8 +56,8 @@ func TestDistributeTimesMultiDayActiveDays(t *testing.T) {
 		dayKey := c.Timestamp.Format("2006-01-02")
 		uniqueDays[dayKey] = true
 
-		if i > 0 && !c.Timestamp.After(commits[i-1].Timestamp) {
-			t.Errorf("commit %d (%v) not after commit %d (%v)", i, c.Timestamp, i-1, commits[i-1].Timestamp)
+		if i > 0 && !commits[i-1].Timestamp.After(c.Timestamp) {
+			t.Errorf("commit %d (%v) not after commit %d (%v)", i-1, commits[i-1].Timestamp, i, c.Timestamp)
 		}
 	}
 

@@ -265,3 +265,30 @@ func BatchRewriteHistory(commits []*CommitState, baseUpstreamSHA string) error {
 	return nil
 }
 
+// GetBackupBranches returns a list of all backup branches created by toolgit.
+func GetBackupBranches() ([]string, error) {
+	cmd := exec.Command("git", "branch", "--list", "toolgit-backup-*")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	var branches []string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		line = strings.TrimPrefix(line, "* ")
+		if line != "" {
+			branches = append(branches, line)
+		}
+	}
+	return branches, nil
+}
+
+// ExecuteRollback hard resets the current branch to the specified backup branch.
+func ExecuteRollback(branch string) error {
+	cmd := exec.Command("git", "reset", "--hard", branch)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("reset failed: %s (%w)", strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}

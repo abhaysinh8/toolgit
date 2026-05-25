@@ -9,6 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -25,6 +29,16 @@ type CommitState struct {
 	Timestamp    time.Time
 	OriginalTime time.Time
 	Selected     bool
+}
+
+type RewriteFinishedMsg struct {
+	BackupBranch string
+	Err          error
+}
+
+type RollbackFinishedMsg struct {
+	Branch string
+	Err    error
 }
 
 // DistributeTimes spaces commits naturally with realistic human jitter across the time window.
@@ -46,6 +60,13 @@ func DistributeTimesOrganic(commits []*CommitState, start time.Time, end time.Ti
 		end = start
 	}
 
+	// Git log returns commits newest-first. We need to assign times 
+	// chronologically, so we reverse the slice to process oldest-first.
+	chronoCommits := make([]*CommitState, n)
+	for i := 0; i < n; i++ {
+		chronoCommits[i] = commits[n-1-i]
+	}
+
 	// Calculate calendar span
 	sDay := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
 	eDay := time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, end.Location())
@@ -58,7 +79,7 @@ func DistributeTimesOrganic(commits []*CommitState, start time.Time, end time.Ti
 
 	// 1. Single Day Window (or sub-day range)
 	if calendarDays <= 1 {
-		distributeSingleDayOrganic(commits, start, end, rng)
+		distributeSingleDayOrganic(chronoCommits, start, end, rng)
 		return
 	}
 
@@ -135,7 +156,7 @@ func DistributeTimesOrganic(commits []*CommitState, start time.Time, end time.Ti
 			dayEnd = dayStart.Add(30 * time.Minute)
 		}
 
-		daySlice := commits[commitIdx : commitIdx+numForDay]
+		daySlice := chronoCommits[commitIdx : commitIdx+numForDay]
 		distributeSingleDayOrganic(daySlice, dayStart, dayEnd, rng)
 		commitIdx += numForDay
 	}
@@ -300,9 +321,46 @@ var (
 			Foreground(lipgloss.Color("#9CA3AF"))
 )
 
+type keyMap struct {
+	Up        key.Binding
+	Down      key.Binding
+	Select    key.Binding
+	SelectAll key.Binding
+	Edit      key.Binding
+	Time      key.Binding
+	Apply     key.Binding
+	Rollback  key.Binding
+	Quit      key.Binding
+}
+
+func (k keyMap) ShortHelp() []key.Binding {
+	return []key.Binding{k.Select, k.Edit, k.Time, k.Apply, k.Rollback, k.Quit}
+}
+
+func (k keyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{
+		{k.Up, k.Down, k.Select, k.SelectAll},
+		{k.Edit, k.Time, k.Apply, k.Rollback, k.Quit},
+	}
+}
+
+var keys = keyMap{
+	Up:        key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
+	Down:      key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
+	Select:    key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "select")),
+	SelectAll: key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "select all")),
+	Edit:      key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit author")),
+	Time:      key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "distribute times")),
+	Apply:     key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "apply/dry-run")),
+	Rollback:  key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "rollback")),
+	Quit:      key.NewBinding(key.WithKeys("q", "esc", "ctrl+c"), key.WithHelp("q", "quit")),
+}
+
 type model struct {
 	commits     []*CommitState
-	cursor      int
+	table       table.Model
+	help        help.Model
+	keys        keyMap
 	width       int
 	height      int
 	status      string
@@ -311,10 +369,11 @@ type model struct {
 	currentBranch string
 
 	// Modals
-	activeModal ActiveModal
-	authorModal EditAuthorModal
-	timeModal   TimePickerModal
-	dryRunModal DryRunModal
+	activeModal   ActiveModal
+	authorModal   EditAuthorModal
+	timeModal     TimePickerModal
+	dryRunModal   DryRunModal
+	rollbackModal RollbackModal
 }
 
 func initialModel() model {
@@ -335,20 +394,88 @@ func initialModel() model {
 		commits = generateMockCommits()
 	}
 
-	statusMsg := "Ready. [e] Edit Author • [d] Distribute Times • [w] Apply/Dry-Run"
+	// Initialize Help
+	h := help.New()
+	h.Styles.ShortKey = lipgloss.NewStyle().
+		Background(lipgloss.Color("#4F46E5")).
+		Foreground(lipgloss.Color("#FFFFFF")).
+		Padding(0, 1).
+		MarginRight(1).
+		Bold(true)
+	h.Styles.ShortDesc = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#A1A1AA"))
+	h.Styles.ShortSeparator = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#27272A")).
+		Padding(0, 1)
+
+	// Initialize Table
+	columns := []table.Column{
+		{Title: " ", Width: 4}, // Status (Modified, Selected)
+		{Title: "Hash", Width: 8},
+		{Title: "Message", Width: 50},
+	}
+	t := table.New(
+		table.WithColumns(columns),
+		table.WithFocused(true),
+		table.WithHeight(15),
+	)
+	
+	s := table.DefaultStyles()
+	s.Header = s.Header.
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color("240")).
+		BorderBottom(true).
+		Bold(false)
+	s.Selected = s.Selected.
+		Foreground(lipgloss.Color("229")).
+		Background(lipgloss.Color("57")).
+		Bold(false)
+	t.SetStyles(s)
+
+	statusMsg := "Ready."
 	if !isReal {
 		statusMsg = "Mock Mode (No Git repo found). Changes will be simulated."
 	}
 
-	return model{
+	m := model{
 		commits:       commits,
-		cursor:        0,
+		table:         t,
+		help:          h,
+		keys:          keys,
 		status:        statusMsg,
 		statusOk:      true,
 		isRealRepo:    isReal,
 		currentBranch: branch,
 		activeModal:   ModalNone,
 	}
+	m.updateTable()
+	return m
+}
+
+func (m *model) updateTable() {
+	var rows []table.Row
+	for _, c := range m.commits {
+		shortHash := c.Hash
+		if len(shortHash) > 7 {
+			shortHash = shortHash[:7]
+		}
+		check := " "
+		if c.Selected {
+			check = "✓"
+		}
+		modMarker := " "
+		if c.AuthorName != c.OriginalName || c.AuthorEmail != c.OriginalMail || !c.Timestamp.Equal(c.OriginalTime) {
+			modMarker = "✎"
+		}
+		status := fmt.Sprintf("%s %s", modMarker, check)
+
+		msg := c.Message
+		if len(msg) > 50 {
+			msg = msg[:47] + "..."
+		}
+		rows = append(rows, table.Row{status, shortHash, msg})
+	}
+	m.table.SetRows(rows)
 }
 
 func (m model) Init() tea.Cmd {
@@ -366,8 +493,9 @@ func (m model) getTargetCommits() ([]*CommitState, bool) {
 	if len(selected) > 0 {
 		return selected, true
 	}
-	if len(m.commits) > 0 && m.cursor < len(m.commits) {
-		return []*CommitState{m.commits[m.cursor]}, false
+	cursor := m.table.Cursor()
+	if len(m.commits) > 0 && cursor < len(m.commits) {
+		return []*CommitState{m.commits[cursor]}, false
 	}
 	return nil, false
 }
@@ -377,6 +505,55 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		return m, nil
+
+	case spinner.TickMsg:
+		if m.activeModal == ModalDryRun {
+			var cmd tea.Cmd
+			m.dryRunModal.Spinner, cmd = m.dryRunModal.Spinner.Update(msg)
+			return m, cmd
+		} else if m.activeModal == ModalRollback && m.rollbackModal.State == RollbackStateExecuting {
+			var cmd tea.Cmd
+			m.rollbackModal.Spinner, cmd = m.rollbackModal.Spinner.Update(msg)
+			return m, cmd
+		}
+		return m, nil
+
+	case RewriteFinishedMsg:
+		if m.activeModal == ModalDryRun {
+			if msg.Err != nil {
+				m.dryRunModal.State = DryRunStateReview
+				m.dryRunModal.ErrorMsg = msg.Err.Error()
+			} else {
+				m.dryRunModal.State = DryRunStateDone
+				m.dryRunModal.BackupBranch = msg.BackupBranch
+				m.dryRunModal.TargetBranch = m.currentBranch
+				
+				// Count selected commits for the summary
+				targets, _ := m.getTargetCommits()
+				m.dryRunModal.Rewritten = len(targets)
+				m.status = fmt.Sprintf("🚀 Rewrote history! Backup branch: %s", msg.BackupBranch)
+				m.statusOk = true
+			}
+		}
+		return m, nil
+
+	case RollbackFinishedMsg:
+		if m.activeModal == ModalRollback {
+			if msg.Err != nil {
+				m.status = "Rollback failed: " + msg.Err.Error()
+				m.statusOk = false
+			} else {
+				m.status = "Successfully rolled back to " + msg.Branch
+				m.statusOk = true
+				// reload commits
+				if newCommits, err := LoadGitCommits(); err == nil {
+					m.commits = newCommits
+					m.updateTable()
+				}
+			}
+			m.activeModal = ModalNone
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -391,32 +568,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Main View Keybindings
-		switch msg.String() {
-		case "q", "esc":
+		switch {
+		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
-
-		case "up", "k":
-			if m.cursor > 0 {
-				m.cursor--
-			} else {
-				m.cursor = len(m.commits) - 1
-			}
-
-		case "down", "j":
-			if m.cursor < len(m.commits)-1 {
-				m.cursor++
-			} else {
-				m.cursor = 0
-			}
-
-		case " ":
-			if len(m.commits) > 0 {
-				m.commits[m.cursor].Selected = !m.commits[m.cursor].Selected
-				m.status = fmt.Sprintf("Toggled commit %s", m.commits[m.cursor].Hash[:7])
+		case key.Matches(msg, m.keys.Up), key.Matches(msg, m.keys.Down):
+			var cmd tea.Cmd
+			m.table, cmd = m.table.Update(msg)
+			return m, cmd
+		case key.Matches(msg, m.keys.Select):
+			cursor := m.table.Cursor()
+			if len(m.commits) > 0 && cursor < len(m.commits) {
+				m.commits[cursor].Selected = !m.commits[cursor].Selected
+				m.status = fmt.Sprintf("Toggled commit %s", m.commits[cursor].Hash[:7])
 				m.statusOk = true
+				m.updateTable()
 			}
-
-		case "a":
+		case key.Matches(msg, m.keys.SelectAll):
 			// Toggle select all
 			allSelected := true
 			for _, c := range m.commits {
@@ -434,8 +601,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "Deselected all commits"
 			}
 			m.statusOk = true
-
-		case "e":
+			m.updateTable()
+		case key.Matches(msg, m.keys.Edit):
 			targets, isBatch := m.getTargetCommits()
 			if len(targets) == 0 {
 				m.status = "No commits available to edit."
@@ -446,8 +613,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			defaultEmail := targets[0].AuthorEmail
 			m.authorModal = NewEditAuthorModal(defaultName, defaultEmail, len(targets), isBatch)
 			m.activeModal = ModalEditAuthor
-
-		case "d":
+		case key.Matches(msg, m.keys.Time):
 			targets, _ := m.getTargetCommits()
 			if len(targets) == 0 {
 				m.status = "No commits available for time distribution."
@@ -455,31 +621,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.timeModal = NewTimePickerModal(len(targets))
-			m.activeModal = ModalTimePicker
-
-		case "t":
-			// Quick distribute selected (09:00 - 17:00 today)
-			targets, _ := m.getTargetCommits()
-			if len(targets) == 0 {
-				m.status = "No commits selected! Press [Space] to select commits."
-				m.statusOk = false
-				return m, nil
-			}
-			now := time.Now()
-			start := time.Date(now.Year(), now.Month(), now.Day(), 9, 0, 0, 0, now.Location())
-			end := time.Date(now.Year(), now.Month(), now.Day(), 17, 0, 0, 0, now.Location())
-			DistributeTimes(targets, start, end)
-			m.status = fmt.Sprintf("✓ Quick distributed %d commit(s) (09:00 - 17:00)", len(targets))
-			m.statusOk = true
-
-		case "w", "r":
+			m.activeModal = ModalTimeShift
+		case key.Matches(msg, m.keys.Apply):
 			// Open Dry-Run / Rewrite Modal
 			diffs := GenerateDryRunDiff(m.commits)
+			s := spinner.New()
+			s.Spinner = spinner.Dot
+			s.Style = lipgloss.NewStyle().Foreground(accentColor)
+			
 			m.dryRunModal = DryRunModal{
+				State:      DryRunStateReview,
+				Spinner:    s,
 				Diffs:      diffs,
 				IsRealRepo: m.isRealRepo,
 			}
 			m.activeModal = ModalDryRun
+		case key.Matches(msg, m.keys.Rollback):
+			backups, err := GetBackupBranches()
+			if err != nil || len(backups) == 0 {
+				m.status = "No backup branches found for rollback."
+				m.statusOk = false
+				return m, nil
+			}
+			m.rollbackModal = NewRollbackModal(backups)
+			m.activeModal = ModalRollback
 		}
 	}
 
@@ -530,7 +695,7 @@ func (m model) handleModalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
-	case ModalTimePicker:
+	case ModalTimeShift:
 		if !m.timeModal.isCustomMode {
 			// Preset List Navigation Mode
 			switch msg.String() {
@@ -612,35 +777,92 @@ func (m model) handleModalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case ModalDryRun:
+	case ModalRollback:
+		if m.rollbackModal.State == RollbackStateExecuting {
+			return m, nil
+		}
+
 		switch msg.String() {
-		case "esc", "n", "N":
+		case "esc", "q":
 			m.activeModal = ModalNone
 			return m, nil
-
-		case "enter", "y", "Y":
-			if m.isRealRepo {
-				backup, err := ExecuteHistoryRewrite(m.commits)
-				if err != nil {
-					m.dryRunModal.ErrorMsg = err.Error()
-					return m, nil
-				}
-				m.activeModal = ModalNone
-				m.status = fmt.Sprintf("🚀 Rewrote history! Backup branch: %s", backup)
-				m.statusOk = true
-			} else {
-				// Mock mode in-memory sync
-				for _, c := range m.commits {
-					c.OriginalName = c.AuthorName
-					c.OriginalMail = c.AuthorEmail
-					c.OriginalTime = c.Timestamp
-					c.Selected = false
-				}
-				m.activeModal = ModalNone
-				m.status = "✓ [Mock Mode] Applied changes in memory successfully."
-				m.statusOk = true
+		case "enter":
+			selected := m.rollbackModal.List.SelectedItem()
+			if selected != nil {
+				branch := selected.FilterValue()
+				m.rollbackModal.State = RollbackStateExecuting
+				return m, tea.Batch(
+					m.rollbackModal.Spinner.Tick,
+					func() tea.Msg {
+						err := ExecuteRollback(branch)
+						return RollbackFinishedMsg{Branch: branch, Err: err}
+					},
+				)
 			}
+			m.activeModal = ModalNone
 			return m, nil
+		default:
+			var cmd tea.Cmd
+			m.rollbackModal.List, cmd = m.rollbackModal.List.Update(msg)
+			return m, cmd
+		}
+
+	case ModalDryRun:
+		switch m.dryRunModal.State {
+		case DryRunStateReview:
+			switch msg.String() {
+			case "esc", "n", "N":
+				m.activeModal = ModalNone
+				return m, nil
+			case "enter", "y", "Y":
+				if m.isRealRepo {
+					m.dryRunModal.State = DryRunStateExecuting
+					
+					// Capture commits slice to pass to goroutine
+					commitsToRewrite := m.commits
+					
+					return m, tea.Batch(
+						m.dryRunModal.Spinner.Tick,
+						func() tea.Msg {
+							backup, err := ExecuteHistoryRewrite(commitsToRewrite)
+							return RewriteFinishedMsg{BackupBranch: backup, Err: err}
+						},
+					)
+				} else {
+					// Mock mode in-memory sync
+					for _, c := range m.commits {
+						c.OriginalName = c.AuthorName
+						c.OriginalMail = c.AuthorEmail
+						c.OriginalTime = c.Timestamp
+						c.Selected = false
+					}
+					m.dryRunModal.State = DryRunStateDone
+					m.dryRunModal.BackupBranch = "mock-backup-branch"
+					m.dryRunModal.TargetBranch = m.currentBranch
+					targets, _ := m.getTargetCommits()
+					m.dryRunModal.Rewritten = len(targets)
+					m.status = "✓ [Mock Mode] Applied changes in memory successfully."
+					m.statusOk = true
+				}
+				return m, nil
+			}
+		case DryRunStateExecuting:
+			// Ignore all input while executing
+			return m, nil
+		case DryRunStateDone:
+			switch msg.String() {
+			case "enter", "esc", "q", " ":
+				m.activeModal = ModalNone
+				
+				if m.isRealRepo {
+					newCommits, err := LoadGitCommits()
+					if err == nil {
+						m.commits = newCommits
+						m.updateTable()
+					}
+				}
+				return m, nil
+			}
 		}
 	}
 
@@ -655,10 +877,10 @@ func (m model) View() string {
 		m.height = 30
 	}
 
-	// Layout dimensions
-	headerHeight := 2
+	// Layout dimensions (reduced by 1 line to prevent Windows scrolling)
+	headerHeight := 1
 	footerHeight := 3
-	paneHeight := m.height - headerHeight - footerHeight
+	paneHeight := m.height - headerHeight - footerHeight - 1
 	if paneHeight < 8 {
 		paneHeight = 8
 	}
@@ -668,7 +890,7 @@ func (m model) View() string {
 	if leftWidth < 38 {
 		leftWidth = 38
 	}
-	rightWidth := m.width - leftWidth - 3
+	rightWidth := m.width - leftWidth - 2
 	if rightWidth < 36 {
 		rightWidth = 36
 	}
@@ -698,112 +920,28 @@ func (m model) View() string {
 		repoBadge,
 	)
 
-	// 2. Left Pane (Commit List with windowed scrolling)
-	// Calculate visible row capacity
-	visibleRows := paneHeight - 3
-	if visibleRows < 1 {
-		visibleRows = 1
+	// 2. Left Pane (Commit List with table)
+	// table.Height sets the number of data rows. 
+	// The table also renders a header (1 line) and a header bottom border (1 line).
+	// To fit within activePaneBorder (which adds 2 lines of border), 
+	// the table data rows should be paneHeight - 4.
+	tableHeight := paneHeight - 4
+	if tableHeight < 1 {
+		tableHeight = 1
 	}
+	m.table.SetHeight(tableHeight)
+	m.table.SetWidth(leftWidth - 2)
 
-	totalCommits := len(m.commits)
-	startIdx := 0
-	if m.cursor >= visibleRows {
-		startIdx = m.cursor - visibleRows + 1
-	}
-	endIdx := startIdx + visibleRows
-	if endIdx > totalCommits {
-		endIdx = totalCommits
-		if endIdx-visibleRows >= 0 {
-			startIdx = endIdx - visibleRows
-		} else {
-			startIdx = 0
-		}
-	}
-
-	// Calculate inner item width to guarantee single-line rendering without wrapping
-	itemWidth := leftWidth - 4
-	if itemWidth < 20 {
-		itemWidth = 20
-	}
-	// Row item padding is 0, 1 -> available text width is itemWidth - 2
-	contentWidth := itemWidth - 2
-
-	var listItems []string
-	for i := startIdx; i < endIdx && i < totalCommits; i++ {
-		c := m.commits[i]
-		shortHash := c.Hash
-		if len(shortHash) > 7 {
-			shortHash = shortHash[:7]
-		}
-
-		check := "[ ]"
-		if c.Selected {
-			check = "[✓]"
-		}
-
-		modMarker := " "
-		if c.AuthorName != c.OriginalName || c.AuthorEmail != c.OriginalMail || !c.Timestamp.Equal(c.OriginalTime) {
-			modMarker = "✎"
-		}
-
-		// Fixed prefix: " ✎ [✓] 7f3a9b2 " ~ 14 characters
-		prefixLen := 14
-		availMsg := contentWidth - prefixLen
-		if availMsg < 6 {
-			availMsg = 6
-		}
-
-		msg := c.Message
-		runes := []rune(msg)
-		if len(runes) > availMsg {
-			if availMsg > 3 {
-				msg = string(runes[:availMsg-1]) + "…"
-			} else {
-				msg = string(runes[:availMsg])
-			}
-		}
-
-		rowText := fmt.Sprintf("%-2s%-4s%-8s%s", modMarker, check, shortHash, msg)
-
-		if i == m.cursor {
-			listItems = append(listItems, cursorItemStyle.Width(itemWidth).Render(rowText))
-		} else {
-			listItems = append(listItems, normalItemStyle.Width(itemWidth).Render(rowText))
-		}
-	}
-
-	// Scroll position indicator
-	scrollInfo := fmt.Sprintf("%d/%d", m.cursor+1, totalCommits)
-	if totalCommits == 0 {
-		scrollInfo = "0/0"
-	}
-
-	headerSpacing := itemWidth - lipgloss.Width("Commits") - lipgloss.Width(scrollInfo)
-	if headerSpacing < 1 {
-		headerSpacing = 1
-	}
-	listHeader := lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		lipgloss.NewStyle().Bold(true).Foreground(highlightColor).Render("Commits"),
-		strings.Repeat(" ", headerSpacing),
-		lipgloss.NewStyle().Foreground(subtleColor).Render(scrollInfo),
-	)
-
-	listContent := lipgloss.JoinVertical(lipgloss.Left, listItems...)
+	listContent := m.table.View()
 	leftPane := activePaneBorder.
 		Width(leftWidth).
 		Height(paneHeight).
-		Render(lipgloss.JoinVertical(
-			lipgloss.Left,
-			listHeader,
-			"",
-			listContent,
-		))
+		Render(listContent)
 
 	// 3. Right Pane (Commit Details)
 	var rightPaneContent string
-	if len(m.commits) > 0 && m.cursor < len(m.commits) {
-		cur := m.commits[m.cursor]
+	if len(m.commits) > 0 && m.table.Cursor() < len(m.commits) {
+		cur := m.commits[m.table.Cursor()]
 
 		isModified := cur.AuthorName != cur.OriginalName ||
 			cur.AuthorEmail != cur.OriginalMail ||
@@ -900,32 +1038,29 @@ func (m model) View() string {
 		}
 	}
 	countsInfo := lipgloss.NewStyle().Foreground(subtleColor).Render(
-		fmt.Sprintf("[%d selected / %d total]", selectedCount, len(m.commits)),
+		fmt.Sprintf("[%d/%d]  [%d selected]", m.table.Cursor()+1, len(m.commits), selectedCount),
 	)
 
 	statusLine := fmt.Sprintf("%s %s  %s", statusIcon, m.status, countsInfo)
 
-	renderKey := func(key, desc string) string {
-		return lipgloss.JoinHorizontal(
-			lipgloss.Center,
-			keyBadgeStyle.Render(key),
-			" ",
-			keyDescStyle.Render(desc),
-		)
+	// Help Bar matching original clean style
+	helpKeyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#F38BA8")).Bold(true)
+	helpDescStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#A1A1AA"))
+	
+	renderBtn := func(key, desc string) string {
+		return fmt.Sprintf("%s %s", helpKeyStyle.Render(key), helpDescStyle.Render(desc))
 	}
-
-	helpBar := lipgloss.JoinHorizontal(
-		lipgloss.Center,
-		renderKey("↑/↓", "Nav"), "  ",
-		renderKey("Space", "Select"), "  ",
-		renderKey("a", "All"), "  ",
-		renderKey("e", "Author"), "  ",
-		renderKey("d", "Times"), "  ",
-		renderKey("w", "Rewrite"), "  ",
-		renderKey("q", "Quit"),
+	
+	helpBar := lipgloss.JoinHorizontal(lipgloss.Left,
+		renderBtn("space", "select"), " • ",
+		renderBtn("e", "edit author"), " • ",
+		renderBtn("d", "distribute times"), " • ",
+		renderBtn("w", "apply/dry-run"), " • ",
+		renderBtn("r", "rollback"), " • ",
+		renderBtn("q", "quit"),
 	)
 
-	footer := lipgloss.JoinVertical(lipgloss.Left, "", statusLine, helpBar)
+	footer := lipgloss.JoinVertical(lipgloss.Left, " ", statusLine, helpBar)
 	mainView := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 
 	// 5. Render Modal Overlay if active
@@ -934,10 +1069,12 @@ func (m model) View() string {
 		switch m.activeModal {
 		case ModalEditAuthor:
 			modalView = m.authorModal.View(m.width)
-		case ModalTimePicker:
+		case ModalTimeShift:
 			modalView = m.timeModal.View(m.width)
 		case ModalDryRun:
 			modalView = m.dryRunModal.View(m.width, m.height)
+		case ModalRollback:
+			modalView = m.rollbackModal.View(m.width)
 		}
 
 		return placeOverlay(m.width, m.height, modalView)

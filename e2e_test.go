@@ -14,24 +14,29 @@ import (
 func TestUserJourneySimulation(t *testing.T) {
 	// 1. Initialize Model
 	m := initialModel()
+	// Force mock mode so we don't accidentally rewrite the real toolgit repo during testing
+	m.isRealRepo = false
 	if len(m.commits) == 0 {
 		t.Fatalf("expected initial commits to be populated")
 	}
 
 	// 2. Test Navigation
-	initialCursor := m.cursor
+	// 1. Initial State Check
+	if m.table.Cursor() != 0 {
+		t.Errorf("Expected initial cursor to be 0, got %d", m.table.Cursor())
+	}
 	// Press 'j' to move down
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 	m = updated.(model)
-	if m.cursor != initialCursor+1 {
-		t.Errorf("expected cursor to be %d, got %d", initialCursor+1, m.cursor)
+	if m.table.Cursor() != 1 {
+		t.Errorf("expected cursor to be 1, got %d", m.table.Cursor())
 	}
 
 	// Press 'k' to move up
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
 	m = updated.(model)
-	if m.cursor != initialCursor {
-		t.Errorf("expected cursor to return to %d, got %d", initialCursor, m.cursor)
+	if m.table.Cursor() != 0 {
+		t.Errorf("Expected cursor to move back to 0, got %d", m.table.Cursor())
 	}
 
 	// 3. Test Selection (Space)
@@ -81,8 +86,8 @@ func TestUserJourneySimulation(t *testing.T) {
 	// 6. Test Custom Time Range Modal ('d')
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	m = updated.(model)
-	if m.activeModal != ModalTimePicker {
-		t.Fatalf("expected ModalTimePicker to be active, got %v", m.activeModal)
+	if m.activeModal != ModalTimeShift {
+		t.Errorf("Expected TimePicker modal to be active")
 	}
 
 	// Apply Preset 0 (Today 9:00 - 17:00) with Enter
@@ -92,10 +97,10 @@ func TestUserJourneySimulation(t *testing.T) {
 		t.Errorf("expected time modal to close, got %v", m.activeModal)
 	}
 
-	// Verify timestamps are distributed
+	// Verify timestamps are distributed in newest-first order
 	for i := 0; i < len(m.commits)-1; i++ {
-		if !m.commits[i+1].Timestamp.After(m.commits[i].Timestamp) {
-			t.Errorf("commit %d timestamp (%v) is not before commit %d timestamp (%v)",
+		if !m.commits[i].Timestamp.After(m.commits[i+1].Timestamp) {
+			t.Errorf("commit %d timestamp (%v) is not after commit %d timestamp (%v)",
 				i, m.commits[i].Timestamp, i+1, m.commits[i+1].Timestamp)
 		}
 	}
@@ -110,8 +115,15 @@ func TestUserJourneySimulation(t *testing.T) {
 	// Confirm Dry-Run ('y')
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 	m = updated.(model)
+	if m.activeModal != ModalDryRun || m.dryRunModal.State != DryRunStateDone {
+		t.Errorf("expected dry run modal to transition to Done, got %v (state %v)", m.activeModal, m.dryRunModal.State)
+	}
+
+	// Close Done screen
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(model)
 	if m.activeModal != ModalNone {
-		t.Errorf("expected dry run modal to close after confirm, got %v", m.activeModal)
+		t.Errorf("expected dry run modal to close after done, got %v", m.activeModal)
 	}
 	if !strings.Contains(m.status, "Applied changes") && !strings.Contains(m.status, "Rewrote history") {
 		t.Errorf("expected success status message, got: %s", m.status)
@@ -191,6 +203,25 @@ func TestRealRepoUserWorkflow(t *testing.T) {
 
 	// Confirm rewrite
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = updated.(model)
+
+	if m.dryRunModal.State != DryRunStateExecuting {
+		t.Fatalf("expected Executing state, got %v", m.dryRunModal.State)
+	}
+
+	// Manually execute the rewrite since we are bypassing the Bubble Tea event loop in tests
+	backup, err := ExecuteHistoryRewrite(m.commits)
+	
+	// Feed the finish message back into the model
+	updated, _ = m.Update(RewriteFinishedMsg{BackupBranch: backup, Err: err})
+	m = updated.(model)
+
+	if m.dryRunModal.State != DryRunStateDone {
+		t.Fatalf("expected Done state, got %v", m.dryRunModal.State)
+	}
+
+	// Close Done screen
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
 
 	if !strings.Contains(m.status, "Rewrote history") {

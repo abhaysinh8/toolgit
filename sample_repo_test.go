@@ -89,8 +89,8 @@ func TestComprehensiveRealRepoWorkflow(t *testing.T) {
 	// 5. Open Dropdown Time Picker with 'd' and select Preset 1 (Yesterday 9am-5pm)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	m = updated.(model)
-	if m.activeModal != ModalTimePicker {
-		t.Fatalf("expected ModalTimePicker, got %v", m.activeModal)
+	if m.activeModal != ModalTimeShift {
+		t.Fatalf("expected ModalTimeShift, got %v", m.activeModal)
 	}
 
 	// Move to Preset 1 (Yesterday Workday) using 'j'
@@ -129,6 +129,22 @@ func TestComprehensiveRealRepoWorkflow(t *testing.T) {
 
 	// 7. Confirm History Rewrite with 'y'
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m = updated.(model)
+
+	if m.dryRunModal.State != DryRunStateExecuting {
+		t.Fatalf("expected Executing state, got %v", m.dryRunModal.State)
+	}
+
+	backup, err := ExecuteHistoryRewrite(m.commits)
+	
+	updated, _ = m.Update(RewriteFinishedMsg{BackupBranch: backup, Err: err})
+	m = updated.(model)
+
+	if m.dryRunModal.State != DryRunStateDone {
+		t.Fatalf("expected Done state, got %v", m.dryRunModal.State)
+	}
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(model)
 
 	if !strings.Contains(m.status, "Rewrote history") {

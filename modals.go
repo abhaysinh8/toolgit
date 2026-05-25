@@ -7,7 +7,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -17,8 +21,9 @@ type ActiveModal int
 const (
 	ModalNone ActiveModal = iota
 	ModalEditAuthor
-	ModalTimePicker
+	ModalTimeShift
 	ModalDryRun
+	ModalRollback
 )
 
 // --- Author / Email Modal ---
@@ -97,6 +102,28 @@ func (m EditAuthorModal) View(maxWidth int) string {
 		MarginBottom(1).
 		Render("✏️  Edit Author & Email")
 
+	nameValid := len(strings.TrimSpace(m.NameInput.Value())) > 0
+	emailValid := len(strings.TrimSpace(m.EmailInput.Value())) > 0
+
+	nameStyle := lipgloss.NewStyle().Foreground(highlightColor)
+	if !nameValid {
+		nameStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	}
+	m.NameInput.PromptStyle = nameStyle
+	m.NameInput.TextStyle = nameStyle
+
+	emailStyle := lipgloss.NewStyle().Foreground(highlightColor)
+	if !emailValid {
+		emailStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	}
+	m.EmailInput.PromptStyle = emailStyle
+	m.EmailInput.TextStyle = emailStyle
+
+	var errDisplay string
+	if !nameValid || !emailValid {
+		errDisplay = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Render("\n⚠️  Fields cannot be empty")
+	}
+
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
 		header,
@@ -105,6 +132,7 @@ func (m EditAuthorModal) View(maxWidth int) string {
 		m.NameInput.View(),
 		"",
 		m.EmailInput.View(),
+		errDisplay,
 		"",
 		lipgloss.NewStyle().Foreground(subtleColor).Render("[Tab/Shift+Tab] Next/Prev  •  [Enter] Apply  •  [Esc] Cancel"),
 	)
@@ -472,14 +500,54 @@ func (m TimePickerModal) View(maxWidth int) string {
 
 // --- Dry-Run & Rebase Confirmation Modal ---
 
+type DryRunState int
+
+const (
+	DryRunStateReview DryRunState = iota
+	DryRunStateExecuting
+	DryRunStateDone
+)
+
 type DryRunModal struct {
+	State        DryRunState
+	Spinner      spinner.Model
+	Viewport     viewport.Model
 	Diffs        []DiffItem
 	BackupBranch string
+	TargetBranch string
 	IsRealRepo   bool
 	ErrorMsg     string
+	Rewritten    int
+}
+
+func (m *DryRunModal) Update(msg tea.Msg) tea.Cmd {
+	var cmd tea.Cmd
+	switch m.State {
+	case DryRunStateReview:
+		m.Viewport, cmd = m.Viewport.Update(msg)
+	case DryRunStateExecuting:
+		m.Spinner, cmd = m.Spinner.Update(msg)
+	}
+	return cmd
 }
 
 func (m DryRunModal) View(maxWidth, maxHeight int) string {
+	var content string
+	
+	switch m.State {
+	case DryRunStateExecuting:
+		header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FAFAFA")).Background(lipgloss.Color("#7D56F4")).Padding(0, 1).Render("🚀 Executing Rewrite...")
+		body := fmt.Sprintf("\n\n  %s Rewriting git history via plumbing commands (commit-tree)...\n  Please wait.\n\n", m.Spinner.View())
+		content = lipgloss.JoinVertical(lipgloss.Left, header, body)
+		return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(highlightColor).Padding(1, 2).Width(86).Render(content)
+	case DryRunStateDone:
+		header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FAFAFA")).Background(lipgloss.Color("#7D56F4")).Padding(0, 1).Render("🎉 Git History Rewrite Complete!")
+		body := fmt.Sprintf("\n🌿 Target Branch:    %s\n🛡️ Safety Backup:    %s\n\n──────────────────────────────────────────────────────────────────────────\n ✓ %d commit(s) successfully rewritten via Git plumbing\n ✓ Commit hashes, timestamps, and author signatures updated\n ✓ Working tree is clean (zero disk checkout overhead)\n\n 💡 Rollback at any time with:\n    git reset --hard %s\n──────────────────────────────────────────────────────────────────────────\n", m.TargetBranch, m.BackupBranch, m.Rewritten, m.BackupBranch)
+		actions := lipgloss.NewStyle().Bold(true).Render("\n              👉 Press [Enter] or [Esc] to Return to Dashboard              ")
+		content = lipgloss.JoinVertical(lipgloss.Left, header, body, actions)
+		return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(highlightColor).Padding(1, 2).Width(86).Render(content)
+	}
+
 	header := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("#FAFAFA")).
@@ -537,7 +605,12 @@ func (m DryRunModal) View(maxWidth, maxHeight int) string {
 		rows = append(rows, rowStyle.Render(rowStr))
 	}
 
-	tableView := lipgloss.JoinVertical(lipgloss.Left, rows...)
+	diffText := lipgloss.JoinVertical(lipgloss.Left, rows...)
+	m.Viewport.SetContent(diffText)
+	m.Viewport.Height = 12
+	m.Viewport.Width = 84
+
+	tableView := lipgloss.JoinVertical(lipgloss.Left, m.Viewport.View(), lipgloss.NewStyle().Foreground(subtleColor).Render(fmt.Sprintf("%3d%%", int(m.Viewport.ScrollPercent()*100))))
 
 	actions := lipgloss.NewStyle().Bold(true).Render(
 		"[Enter / y] Confirm & Rewrite History   •   [Esc / n] Cancel",
@@ -548,7 +621,7 @@ func (m DryRunModal) View(maxWidth, maxHeight int) string {
 		errDisplay = lipgloss.NewStyle().Foreground(warnColor).Bold(true).Render("❌ " + m.ErrorMsg)
 	}
 
-	content := lipgloss.JoinVertical(
+	content = lipgloss.JoinVertical(
 		lipgloss.Left,
 		header,
 		"",
@@ -566,5 +639,74 @@ func (m DryRunModal) View(maxWidth, maxHeight int) string {
 		BorderForeground(highlightColor).
 		Padding(1, 2).
 		Width(86).
+		Render(content)
+}
+
+// --- Rollback Modal ---
+
+type RollbackState int
+
+const (
+	RollbackStateSelect RollbackState = iota
+	RollbackStateExecuting
+)
+
+type RollbackModal struct {
+	List    list.Model
+	State   RollbackState
+	Spinner spinner.Model
+}
+
+func NewRollbackModal(branches []string) RollbackModal {
+	items := make([]list.Item, len(branches))
+	for i, b := range branches {
+		items[i] = branchItem(b)
+	}
+
+	l := list.New(items, list.NewDefaultDelegate(), 60, 16)
+	l.Title = "Select Backup Branch to Rollback"
+	l.SetShowStatusBar(false)
+	l.SetFilteringEnabled(true)
+	l.Styles.Title = lipgloss.NewStyle().Background(highlightColor).Foreground(lipgloss.Color("#FFFFFF")).Padding(0, 1).Bold(true)
+
+	s := spinner.New()
+	s.Spinner = spinner.Dot
+	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#F38BA8"))
+
+	return RollbackModal{
+		List:    l,
+		State:   RollbackStateSelect,
+		Spinner: s,
+	}
+}
+
+type branchItem string
+
+func (i branchItem) Title() string       { return string(i) }
+func (i branchItem) Description() string { return "toolgit automated backup" }
+func (i branchItem) FilterValue() string { return string(i) }
+
+func (m *RollbackModal) Update(msg tea.Msg) tea.Cmd {
+	var cmd tea.Cmd
+	m.List, cmd = m.List.Update(msg)
+	return cmd
+}
+
+func (m RollbackModal) View(maxWidth int) string {
+	var content string
+
+	if m.State == RollbackStateExecuting {
+		header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FAFAFA")).Background(lipgloss.Color("#F38BA8")).Padding(0, 1).Render("🔄 Executing Rollback...")
+		body := fmt.Sprintf("\n\n  %s Restoring branch to backup state...\n  Please wait.\n\n", m.Spinner.View())
+		content = lipgloss.JoinVertical(lipgloss.Left, header, body)
+	} else {
+		content = m.List.View()
+	}
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(highlightColor).
+		Padding(1, 2).
+		Width(66).
 		Render(content)
 }
