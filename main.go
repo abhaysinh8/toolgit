@@ -1053,6 +1053,7 @@ func (m model) View() string {
 	
 	helpBar := lipgloss.JoinHorizontal(lipgloss.Left,
 		renderBtn("space", "select"), " • ",
+		renderBtn("a", "select all"), " • ",
 		renderBtn("e", "edit author"), " • ",
 		renderBtn("d", "distribute times"), " • ",
 		renderBtn("w", "apply/dry-run"), " • ",
