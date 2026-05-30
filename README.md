@@ -29,12 +29,13 @@
 
 | Feature | Description |
 |---|---|
-| 🖥️ **Split-Pane Layout** | **Left (~48%)**: Smooth windowed commit list with selection markers (`[✓]`) and edit flags (`✎`).<br>**Right (~52%)**: Metadata card showing Full SHA, Author, Email, Timestamps, Relative Age, and message quote block. |
+| 🖥️ **Split-Pane Layout** | **Left (~48%)**: Smooth windowed commit list with selection markers (`[✓]`) and edit flags (`✎`). Footer includes dynamic cursor tracking (e.g. `[5/51]`).<br>**Right (~52%)**: Metadata card showing Full SHA, Author, Email, Timestamps, Relative Age, and message quote block. |
 | 🌿 **Organic Human Jitter** | Eliminates robotic mathematical steps and identical `:00` seconds with natural gap variance and randomized seconds. |
 | 📅 **Multi-Day Active Days** | Partition commits across a chosen number of active days (e.g. 22 commits over 10 distinct days) during daytime hours. |
 | 👤 **Interactive Author Editor** | Edit Author Name and Email for single commits or in batch across all selected commits with live form navigation. |
 | ⏳ **Smart Time Range Picker** | Instant presets (*"Today Workday"*, *"Yesterday Workday"*, *"Past 3h"*, *"Past 8h"*) plus full custom date range controls. |
 | 🛡️ **Non-Destructive Dry-Run** | Side-by-side diff inspection with **automatic safety backup branches** (`toolgit-backup-<timestamp>`) before any rewrite. |
+| 🔄 **Async Rollback Engine** | Menu of previous safety backups with animated async loading overlay when restoring history. |
 | ⚡ **Live Dev Toolchain** | Fast build script (`update.ps1`) and file watcher (`watch.ps1`) for automatic hot rebuilding on save. |
 
 ---

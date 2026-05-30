@@ -165,6 +165,10 @@ Modals render as centered floating cards using `lipgloss.Place`:
 3. **Dry-Run Diff Review (<kbd>w</kbd>)**:
    - Color-coded side-by-side metadata diff table (`✎` modified flags in green/pink).
    - Safety backup notice and confirmation guard.
+   - Asynchronous background execution with live loading spinner feedback.
+4. **Safety Rollback (<kbd>r</kbd>)**:
+   - Menu of timestamped automatic safety backup branches.
+   - Restores branch synchronously inside a background goroutine with visual loading spinner.
 
 ---
 
