@@ -1,4 +1,4 @@
-package main
+package git
 
 import (
 	"bytes"
@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"toolgit/internal/core"
 )
 
 // IsInsideGitRepo checks if the current working directory is inside a Git repository.
@@ -28,7 +30,7 @@ func GetCurrentBranch() (string, error) {
 // LoadGitCommits attempts to load commits from the repository.
 // It prioritizes unpushed commits (@{u}..HEAD); if no upstream is configured,
 // it loads all commits on the current branch.
-func LoadGitCommits() ([]*CommitState, error) {
+func LoadGitCommits() ([]*core.CommitState, error) {
 	if !IsInsideGitRepo() {
 		return nil, fmt.Errorf("not a git repository")
 	}
@@ -53,7 +55,7 @@ func LoadGitCommits() ([]*CommitState, error) {
 
 // fetchGitLog executes git log and parses the custom delimited output.
 // Delimiters: \x1f (Unit Separator between fields), \x1e (Record Separator between commits).
-func fetchGitLog(args ...string) ([]*CommitState, error) {
+func fetchGitLog(args ...string) ([]*core.CommitState, error) {
 	format := "%H%x1f%an%x1f%ae%x1f%aI%x1f%B%x1e"
 	cmdArgs := append([]string{"log", fmt.Sprintf("--format=%s", format)}, args...)
 	cmd := exec.Command("git", cmdArgs...)
@@ -69,7 +71,7 @@ func fetchGitLog(args ...string) ([]*CommitState, error) {
 	}
 
 	records := strings.Split(raw, "\x1e")
-	var commits []*CommitState
+	var commits []*core.CommitState
 
 	for _, rec := range records {
 		rec = strings.TrimSpace(rec)
@@ -94,7 +96,7 @@ func fetchGitLog(args ...string) ([]*CommitState, error) {
 			t, _ = time.Parse("2006-01-02 15:04:05 -0700", dateStr)
 		}
 
-		commits = append(commits, &CommitState{
+		commits = append(commits, &core.CommitState{
 			Hash:         hash,
 			OriginalHash: hash,
 			Message:      message,
@@ -124,29 +126,15 @@ func CreateBackupBranch() (string, error) {
 	return branchName, nil
 }
 
-// DiffItem holds before and after metadata for a single commit for dry-run inspection.
-type DiffItem struct {
-	OldHash     string
-	NewHash     string
-	OldAuthor   string
-	NewAuthor   string
-	OldEmail    string
-	NewEmail    string
-	OldTime     time.Time
-	NewTime     time.Time
-	Message     string
-	IsModified  bool
-}
-
 // GenerateDryRunDiff compares original commit states against current edits.
-func GenerateDryRunDiff(commits []*CommitState) []DiffItem {
-	var diffs []DiffItem
+func GenerateDryRunDiff(commits []*core.CommitState) []core.DiffItem {
+	var diffs []core.DiffItem
 	for _, c := range commits {
 		modified := c.AuthorName != c.OriginalName ||
 			c.AuthorEmail != c.OriginalMail ||
 			!c.Timestamp.Equal(c.OriginalTime)
 
-		diffs = append(diffs, DiffItem{
+		diffs = append(diffs, core.DiffItem{
 			OldHash:    c.OriginalHash,
 			NewHash:    "pending rewrite",
 			OldAuthor:  c.OriginalName,
@@ -164,7 +152,7 @@ func GenerateDryRunDiff(commits []*CommitState) []DiffItem {
 
 // ExecuteHistoryRewrite safely rewrites commit history using Git plumbing commands.
 // Commits must be passed in order (HEAD down to oldest or oldest to HEAD).
-func ExecuteHistoryRewrite(commits []*CommitState) (string, error) {
+func ExecuteHistoryRewrite(commits []*core.CommitState) (string, error) {
 	if len(commits) == 0 {
 		return "", fmt.Errorf("no commits to rewrite")
 	}
@@ -177,7 +165,7 @@ func ExecuteHistoryRewrite(commits []*CommitState) (string, error) {
 
 	// 2. Commits are displayed newest first in Git log.
 	// We reverse them to rewrite from oldest ancestor to newest (HEAD).
-	ordered := make([]*CommitState, len(commits))
+	ordered := make([]*core.CommitState, len(commits))
 	for i := range commits {
 		ordered[i] = commits[len(commits)-1-i]
 	}
@@ -186,7 +174,7 @@ func ExecuteHistoryRewrite(commits []*CommitState) (string, error) {
 	oldestHash := ordered[0].OriginalHash
 	parentCmd := exec.Command("git", "rev-parse", oldestHash+"^@")
 	parentOut, _ := parentCmd.Output()
-	
+
 	// Handle multiple parents (e.g. merge commits) by grabbing the first parent,
 	// or format it cleanly for the PowerShell script.
 	parents := strings.Fields(strings.TrimSpace(string(parentOut)))
@@ -210,7 +198,7 @@ func escapePS(val string) string {
 	return strings.ReplaceAll(val, "'", "''")
 }
 
-func BatchRewriteHistory(commits []*CommitState, baseUpstreamSHA string) error {
+func BatchRewriteHistory(commits []*core.CommitState, baseUpstreamSHA string) error {
 	var script strings.Builder
 
 	// 1. Initialize $PARENT

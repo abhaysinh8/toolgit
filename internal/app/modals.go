@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"fmt"
@@ -13,6 +13,8 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"toolgit/internal/core"
 )
 
 // ActiveModal enum represents the current modal dialog state.
@@ -29,9 +31,9 @@ const (
 // --- Author / Email Modal ---
 
 type EditAuthorModal struct {
-	NameInput  textinput.Model
-	EmailInput textinput.Model
-	focusIndex int
+	NameInput   textinput.Model
+	EmailInput  textinput.Model
+	focusIndex  int
 	targetCount int
 	isBatch     bool
 }
@@ -512,7 +514,7 @@ type DryRunModal struct {
 	State        DryRunState
 	Spinner      spinner.Model
 	Viewport     viewport.Model
-	Diffs        []DiffItem
+	Diffs        []core.DiffItem
 	BackupBranch string
 	TargetBranch string
 	IsRealRepo   bool
@@ -533,7 +535,7 @@ func (m *DryRunModal) Update(msg tea.Msg) tea.Cmd {
 
 func (m DryRunModal) View(maxWidth, maxHeight int) string {
 	var content string
-	
+
 	switch m.State {
 	case DryRunStateExecuting:
 		header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FAFAFA")).Background(lipgloss.Color("#7D56F4")).Padding(0, 1).Render("🚀 Executing Rewrite...")

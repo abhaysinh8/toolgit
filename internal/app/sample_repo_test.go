@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"fmt"
@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"toolgit/internal/git"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -135,8 +136,8 @@ func TestComprehensiveRealRepoWorkflow(t *testing.T) {
 		t.Fatalf("expected Executing state, got %v", m.dryRunModal.State)
 	}
 
-	backup, err := ExecuteHistoryRewrite(m.commits)
-	
+	backup, err := git.ExecuteHistoryRewrite(m.commits)
+
 	updated, _ = m.Update(RewriteFinishedMsg{BackupBranch: backup, Err: err})
 	m = updated.(model)
 

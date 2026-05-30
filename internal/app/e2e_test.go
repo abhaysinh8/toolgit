@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"os"
@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"toolgit/internal/git"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -210,8 +211,8 @@ func TestRealRepoUserWorkflow(t *testing.T) {
 	}
 
 	// Manually execute the rewrite since we are bypassing the Bubble Tea event loop in tests
-	backup, err := ExecuteHistoryRewrite(m.commits)
-	
+	backup, err := git.ExecuteHistoryRewrite(m.commits)
+
 	// Feed the finish message back into the model
 	updated, _ = m.Update(RewriteFinishedMsg{BackupBranch: backup, Err: err})
 	m = updated.(model)

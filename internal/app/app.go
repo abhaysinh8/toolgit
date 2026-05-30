@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"fmt"
@@ -15,21 +15,10 @@ import (
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-)
 
-// CommitState represents a Git commit's metadata and selection status.
-type CommitState struct {
-	Hash         string
-	OriginalHash string
-	Message      string
-	AuthorName   string
-	OriginalName string
-	AuthorEmail  string
-	OriginalMail string
-	Timestamp    time.Time
-	OriginalTime time.Time
-	Selected     bool
-}
+	"toolgit/internal/core"
+	"toolgit/internal/git"
+)
 
 type RewriteFinishedMsg struct {
 	BackupBranch string
@@ -42,12 +31,12 @@ type RollbackFinishedMsg struct {
 }
 
 // DistributeTimes spaces commits naturally with realistic human jitter across the time window.
-func DistributeTimes(commits []*CommitState, start time.Time, end time.Time) {
+func DistributeTimes(commits []*core.CommitState, start time.Time, end time.Time) {
 	DistributeTimesOrganic(commits, start, end, 0)
 }
 
 // DistributeTimesOrganic distributes commits with organic human jitter, natural seconds, and active days partitioning.
-func DistributeTimesOrganic(commits []*CommitState, start time.Time, end time.Time, minDays int) {
+func DistributeTimesOrganic(commits []*core.CommitState, start time.Time, end time.Time, minDays int) {
 	n := len(commits)
 	if n == 0 {
 		return
@@ -60,9 +49,9 @@ func DistributeTimesOrganic(commits []*CommitState, start time.Time, end time.Ti
 		end = start
 	}
 
-	// Git log returns commits newest-first. We need to assign times 
+	// Git log returns commits newest-first. We need to assign times
 	// chronologically, so we reverse the slice to process oldest-first.
-	chronoCommits := make([]*CommitState, n)
+	chronoCommits := make([]*core.CommitState, n)
 	for i := 0; i < n; i++ {
 		chronoCommits[i] = commits[n-1-i]
 	}
@@ -162,7 +151,7 @@ func DistributeTimesOrganic(commits []*CommitState, start time.Time, end time.Ti
 	}
 }
 
-func distributeSingleDayOrganic(commits []*CommitState, start, end time.Time, rng *rand.Rand) {
+func distributeSingleDayOrganic(commits []*core.CommitState, start, end time.Time, rng *rand.Rand) {
 	n := len(commits)
 	if n == 0 {
 		return
@@ -217,7 +206,7 @@ func distributeSingleDayOrganic(commits []*CommitState, start, end time.Time, rn
 }
 
 // generateMockCommits generates 5 mock commits when no Git repository is found.
-func generateMockCommits() []*CommitState {
+func generateMockCommits() []*core.CommitState {
 	now := time.Now()
 	mockData := []struct {
 		hash, msg, name, email string
@@ -230,10 +219,10 @@ func generateMockCommits() []*CommitState {
 		{"5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d7c6b", "test: add unit tests for time distribution algorithm", "Alex Chen", "alex.chen@example.com", 0},
 	}
 
-	var list []*CommitState
+	var list []*core.CommitState
 	for _, m := range mockData {
 		t := now.Add(m.offset)
-		list = append(list, &CommitState{
+		list = append(list, &core.CommitState{
 			Hash:         m.hash,
 			OriginalHash: m.hash,
 			Message:      m.msg,
@@ -357,15 +346,15 @@ var keys = keyMap{
 }
 
 type model struct {
-	commits     []*CommitState
-	table       table.Model
-	help        help.Model
-	keys        keyMap
-	width       int
-	height      int
-	status      string
-	statusOk    bool
-	isRealRepo  bool
+	commits       []*core.CommitState
+	table         table.Model
+	help          help.Model
+	keys          keyMap
+	width         int
+	height        int
+	status        string
+	statusOk      bool
+	isRealRepo    bool
 	currentBranch string
 
 	// Modals
@@ -377,16 +366,16 @@ type model struct {
 }
 
 func initialModel() model {
-	var commits []*CommitState
+	var commits []*core.CommitState
 	isReal := false
 	branch := ""
 
-	if IsInsideGitRepo() {
-		realCommits, err := LoadGitCommits()
+	if git.IsInsideGitRepo() {
+		realCommits, err := git.LoadGitCommits()
 		if err == nil && len(realCommits) > 0 {
 			commits = realCommits
 			isReal = true
-			branch, _ = GetCurrentBranch()
+			branch, _ = git.GetCurrentBranch()
 		}
 	}
 
@@ -419,7 +408,7 @@ func initialModel() model {
 		table.WithFocused(true),
 		table.WithHeight(15),
 	)
-	
+
 	s := table.DefaultStyles()
 	s.Header = s.Header.
 		BorderStyle(lipgloss.NormalBorder()).
@@ -483,8 +472,8 @@ func (m model) Init() tea.Cmd {
 }
 
 // getTargetCommits returns selected commits, or if none selected, the currently hovered commit.
-func (m model) getTargetCommits() ([]*CommitState, bool) {
-	var selected []*CommitState
+func (m model) getTargetCommits() ([]*core.CommitState, bool) {
+	var selected []*core.CommitState
 	for _, c := range m.commits {
 		if c.Selected {
 			selected = append(selected, c)
@@ -495,7 +484,7 @@ func (m model) getTargetCommits() ([]*CommitState, bool) {
 	}
 	cursor := m.table.Cursor()
 	if len(m.commits) > 0 && cursor < len(m.commits) {
-		return []*CommitState{m.commits[cursor]}, false
+		return []*core.CommitState{m.commits[cursor]}, false
 	}
 	return nil, false
 }
@@ -528,7 +517,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.dryRunModal.State = DryRunStateDone
 				m.dryRunModal.BackupBranch = msg.BackupBranch
 				m.dryRunModal.TargetBranch = m.currentBranch
-				
+
 				// Count selected commits for the summary
 				targets, _ := m.getTargetCommits()
 				m.dryRunModal.Rewritten = len(targets)
@@ -547,7 +536,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "Successfully rolled back to " + msg.Branch
 				m.statusOk = true
 				// reload commits
-				if newCommits, err := LoadGitCommits(); err == nil {
+				if newCommits, err := git.LoadGitCommits(); err == nil {
 					m.commits = newCommits
 					m.updateTable()
 				}
@@ -624,11 +613,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.activeModal = ModalTimeShift
 		case key.Matches(msg, m.keys.Apply):
 			// Open Dry-Run / Rewrite Modal
-			diffs := GenerateDryRunDiff(m.commits)
+			diffs := git.GenerateDryRunDiff(m.commits)
 			s := spinner.New()
 			s.Spinner = spinner.Dot
 			s.Style = lipgloss.NewStyle().Foreground(accentColor)
-			
+
 			m.dryRunModal = DryRunModal{
 				State:      DryRunStateReview,
 				Spinner:    s,
@@ -637,7 +626,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.activeModal = ModalDryRun
 		case key.Matches(msg, m.keys.Rollback):
-			backups, err := GetBackupBranches()
+			backups, err := git.GetBackupBranches()
 			if err != nil || len(backups) == 0 {
 				m.status = "No backup branches found for rollback."
 				m.statusOk = false
@@ -794,7 +783,7 @@ func (m model) handleModalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(
 					m.rollbackModal.Spinner.Tick,
 					func() tea.Msg {
-						err := ExecuteRollback(branch)
+						err := git.ExecuteRollback(branch)
 						return RollbackFinishedMsg{Branch: branch, Err: err}
 					},
 				)
@@ -817,14 +806,14 @@ func (m model) handleModalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			case "enter", "y", "Y":
 				if m.isRealRepo {
 					m.dryRunModal.State = DryRunStateExecuting
-					
+
 					// Capture commits slice to pass to goroutine
 					commitsToRewrite := m.commits
-					
+
 					return m, tea.Batch(
 						m.dryRunModal.Spinner.Tick,
 						func() tea.Msg {
-							backup, err := ExecuteHistoryRewrite(commitsToRewrite)
+							backup, err := git.ExecuteHistoryRewrite(commitsToRewrite)
 							return RewriteFinishedMsg{BackupBranch: backup, Err: err}
 						},
 					)
@@ -853,9 +842,9 @@ func (m model) handleModalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "enter", "esc", "q", " ":
 				m.activeModal = ModalNone
-				
+
 				if m.isRealRepo {
-					newCommits, err := LoadGitCommits()
+					newCommits, err := git.LoadGitCommits()
 					if err == nil {
 						m.commits = newCommits
 						m.updateTable()
@@ -921,9 +910,9 @@ func (m model) View() string {
 	)
 
 	// 2. Left Pane (Commit List with table)
-	// table.Height sets the number of data rows. 
+	// table.Height sets the number of data rows.
 	// The table also renders a header (1 line) and a header bottom border (1 line).
-	// To fit within activePaneBorder (which adds 2 lines of border), 
+	// To fit within activePaneBorder (which adds 2 lines of border),
 	// the table data rows should be paneHeight - 4.
 	tableHeight := paneHeight - 4
 	if tableHeight < 1 {
@@ -1046,11 +1035,11 @@ func (m model) View() string {
 	// Help Bar matching original clean style
 	helpKeyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#F38BA8")).Bold(true)
 	helpDescStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#A1A1AA"))
-	
+
 	renderBtn := func(key, desc string) string {
 		return fmt.Sprintf("%s %s", helpKeyStyle.Render(key), helpDescStyle.Render(desc))
 	}
-	
+
 	helpBar := lipgloss.JoinHorizontal(lipgloss.Left,
 		renderBtn("space", "select"), " • ",
 		renderBtn("a", "select all"), " • ",
@@ -1125,4 +1114,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error running toolgit: %v\n", err)
 		os.Exit(1)
 	}
+}
+func Start() error {
+	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
+	_, err := p.Run()
+	return err
 }

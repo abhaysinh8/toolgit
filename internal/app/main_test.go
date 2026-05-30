@@ -1,8 +1,10 @@
-package main
+package app
 
 import (
 	"testing"
 	"time"
+	"toolgit/internal/core"
+	"toolgit/internal/git"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -11,7 +13,7 @@ func TestDistributeTimesOrganicMonotonicityAndBounds(t *testing.T) {
 	start := time.Date(2026, 8, 27, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 8, 27, 17, 0, 0, 0, time.UTC)
 
-	commits := []*CommitState{
+	commits := []*core.CommitState{
 		{Hash: "1"},
 		{Hash: "2"},
 		{Hash: "3"},
@@ -42,9 +44,9 @@ func TestDistributeTimesMultiDayActiveDays(t *testing.T) {
 	end := time.Date(2026, 4, 24, 7, 0, 0, 0, time.UTC)
 
 	// Create 22 commits
-	commits := make([]*CommitState, 22)
+	commits := make([]*core.CommitState, 22)
 	for i := 0; i < 22; i++ {
-		commits[i] = &CommitState{Hash: string(rune('A' + i))}
+		commits[i] = &core.CommitState{Hash: string(rune('A' + i))}
 	}
 
 	// Distribute across at least 10 days
@@ -70,7 +72,7 @@ func TestDistributeTimesSingleItem(t *testing.T) {
 	start := time.Date(2026, 8, 27, 9, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 8, 27, 17, 0, 0, 0, time.UTC)
 
-	commits := []*CommitState{{Hash: "1"}}
+	commits := []*core.CommitState{{Hash: "1"}}
 	DistributeTimes(commits, start, end)
 
 	if commits[0].Timestamp.Before(start) || commits[0].Timestamp.After(end) {
@@ -82,7 +84,7 @@ func TestGenerateDryRunDiff(t *testing.T) {
 	t1 := time.Date(2026, 8, 27, 10, 0, 0, 0, time.UTC)
 	t2 := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 
-	commits := []*CommitState{
+	commits := []*core.CommitState{
 		{
 			OriginalHash: "abc1234",
 			OriginalName: "Old Author",
@@ -105,7 +107,7 @@ func TestGenerateDryRunDiff(t *testing.T) {
 		},
 	}
 
-	diffs := GenerateDryRunDiff(commits)
+	diffs := git.GenerateDryRunDiff(commits)
 	if len(diffs) != 2 {
 		t.Fatalf("expected 2 diff items, got %d", len(diffs))
 	}

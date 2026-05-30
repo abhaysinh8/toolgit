@@ -36,7 +36,7 @@
 | ⏳ **Smart Time Range Picker** | Instant presets (*"Today Workday"*, *"Yesterday Workday"*, *"Past 3h"*, *"Past 8h"*) plus full custom date range controls. |
 | 🛡️ **Non-Destructive Dry-Run** | Side-by-side diff inspection with **automatic safety backup branches** (`toolgit-backup-<timestamp>`) before any rewrite. |
 | 🔄 **Async Rollback Engine** | Menu of previous safety backups with animated async loading overlay when restoring history. |
-| ⚡ **Live Dev Toolchain** | Fast build script (`update.ps1`) and file watcher (`watch.ps1`) for automatic hot rebuilding on save. |
+| ⚡ **Live Dev Toolchain** | Fast build script (`scripts/build/update.ps1`) and file watcher (`scripts/dev/watch.ps1`) for automatic hot rebuilding on save. |
 
 ---
 
@@ -68,10 +68,10 @@ Run the automated update script to test, compile, and register `toolgit` into yo
 
 ```powershell
 # In PowerShell:
-.\update.ps1
+.\scripts\build\update.ps1
 ```
 
-*(Or in Windows Command Prompt: `.\update.cmd`)*
+*(Or in Windows Command Prompt: `.\scripts\build\update.cmd`)*
 
 ### 2. Launch Anywhere
 Once installed, open any terminal in any Git repository and run:
@@ -145,26 +145,23 @@ go test -v ./...
 
 ```
 toolgit/
-├── main.go               # Core TUI model, event loop, view router, and organic distribution engine
-├── git.go                # Git detection, commit loader, backup branch creator, and rewrite engine
-├── modals.go             # Interactive modal views (Author editor, Time & Days picker, Dry-Run diff)
-├── main_test.go          # Unit tests for organic jitter, multi-day partitioning, and modal parsing
-├── git_test.go           # Integration tests for Git commit rewriting and safety backups
-├── sample_repo_test.go   # End-to-end live repository workflow simulation test
-├── update.ps1            # PowerShell test, build, and global installer script
-├── update.cmd            # Batch test, build, and global installer script
-├── watch.ps1             # Background file watcher for auto-rebuilding on save
+├── cmd/toolgit/
+│   └── main.go           # Minimal application entry point
+├── internal/
+│   ├── app/              # TUI components, state machines, and organic distribution engine
+│   ├── core/             # Shared domain types (CommitState, DiffItem)
+│   └── git/              # Git plumbing, commit loader, backup, and rewrite engine
+├── scripts/
+│   ├── build/            # PowerShell/Batch build and global installer scripts
+│   └── dev/              # Background file watchers for hot reloading
+├── docs/                 # Internal architecture and deep-dive design documents
 ├── go.mod                # Go module dependencies
 ├── README.md             # Project documentation
-├── HOW_IT_WORKS.md       # Internal architecture and mechanics guide
-├── REWRITE_FLOW_PROPOSAL.md # Design proposal for 2-stage rewrite modal flow
-└── MULTI_AUTHOR_PROPOSAL.md # Design proposal for multi-author & team collaboration suite
 ```
 
 ---
 
 ## 📚 Deep-Dive Documentation
 
-- 👉 **[HOW_IT_WORKS.md](file:///e:/qa/toolgit/HOW_IT_WORKS.md)**: Mathematical models for organic jitter, Git plumbing architecture, and viewport windowing algorithms.
-- 👉 **[REWRITE_FLOW_PROPOSAL.md](file:///e:/qa/toolgit/REWRITE_FLOW_PROPOSAL.md)**: Design proposal for the interactive 2-stage Review $\rightarrow$ Done rewrite modal workflow.
-- 👉 **[MULTI_AUTHOR_PROPOSAL.md](file:///e:/qa/toolgit/MULTI_AUTHOR_PROPOSAL.md)**: Design proposal for team contributor rosters, author initials badges, pair-programming distribution, and GitHub `Co-authored-by:` trailers.
+- 👉 **[HOW_IT_WORKS.md](file:///e:/qa/toolgit/docs/HOW_IT_WORKS.md)**: Mathematical models for organic jitter, Git plumbing architecture, and viewport windowing algorithms.
+- 👉 **[MULTI_AUTHOR_PROPOSAL.md](file:///e:/qa/toolgit/docs/MULTI_AUTHOR_PROPOSAL.md)**: Design proposal for team contributor rosters, author initials badges, pair-programming distribution, and GitHub `Co-authored-by:` trailers.

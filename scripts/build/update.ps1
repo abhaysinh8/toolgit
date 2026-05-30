@@ -24,7 +24,7 @@ if (-not $SkipTests) {
 
 # 2. Local Workspace Build
 Write-Host "`n[2/3] 🔨 Building local executable (toolgit.exe)..." -ForegroundColor Yellow
-go build -o toolgit.exe .
+go build -o toolgit.exe ./cmd/toolgit
 if ($LASTEXITCODE -ne 0) {
     Write-Host "❌ Build failed!" -ForegroundColor Red
     exit 1
@@ -33,7 +33,7 @@ Write-Host "  ✓ Local binary created: .\toolgit.exe" -ForegroundColor Green
 
 # 3. Global Terminal Command Update
 Write-Host "`n[3/3] 🚀 Updating global terminal command (toolgit)..." -ForegroundColor Yellow
-go install .
+go install ./cmd/toolgit
 if ($LASTEXITCODE -ne 0) {
     Write-Host "❌ Failed to install globally!" -ForegroundColor Red
     exit 1

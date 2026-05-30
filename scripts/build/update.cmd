@@ -14,7 +14,7 @@ if %ERRORLEVEL% NEQ 0 (
 
 echo.
 echo [2/3] Building local toolgit.exe...
-go build -o toolgit.exe .
+go build -o toolgit.exe ./cmd/toolgit
 if %ERRORLEVEL% NEQ 0 (
     echo [ERROR] Local build failed!
     exit /b %ERRORLEVEL%
@@ -22,7 +22,7 @@ if %ERRORLEVEL% NEQ 0 (
 
 echo.
 echo [3/3] Installing global terminal command...
-go install .
+go install ./cmd/toolgit
 if %ERRORLEVEL% NEQ 0 (
     echo [ERROR] Failed to install globally!
     exit /b %ERRORLEVEL%
