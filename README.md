@@ -189,5 +189,5 @@ toolgit/
 
 ## 📚 Deep-Dive Documentation
 
-- 👉 **[HOW_IT_WORKS.md](file:///e:/qa/toolgit/docs/HOW_IT_WORKS.md)**: Mathematical models for organic jitter, Git plumbing architecture, and viewport windowing algorithms.
-- 👉 **[MULTI_AUTHOR_PROPOSAL.md](file:///e:/qa/toolgit/docs/MULTI_AUTHOR_PROPOSAL.md)**: Design proposal for team contributor rosters, author initials badges, pair-programming distribution, and GitHub `Co-authored-by:` trailers.
+- 👉 **[HOW_IT_WORKS.md](./docs/HOW_IT_WORKS.md)**: Mathematical models for organic jitter, Git plumbing architecture, and viewport windowing algorithms.
+- 👉 **[MULTI_AUTHOR_PROPOSAL.md](./docs/MULTI_AUTHOR_PROPOSAL.md)**: Design proposal for team contributor rosters, author initials badges, pair-programming distribution, and GitHub `Co-authored-by:` trailers.
