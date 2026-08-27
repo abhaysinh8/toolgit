@@ -96,14 +96,14 @@ toolgit
 
 ## 📦 Release & Packaging Workflow
 
-`toolgit` includes an automated GitHub Actions pipeline (`.github/workflows/release.yml`) for cross-platform distribution.
+`toolgit` includes an automated GitHub Actions pipeline (`.github/workflows/release.yml`) for Windows distribution.
 
 To trigger a new release:
 1. Commit your changes and tag the commit with a version number (e.g., `v1.0.0`).
 2. Push the tag to GitHub: `git push origin v1.0.0`
 
 GitHub Actions will automatically:
-- Build optimized, stripped binaries (`-s -w`) for Windows, macOS, and Linux (both `amd64` and `arm64`).
+- Build optimized, stripped binaries (`-s -w`) for Windows (both `amd64` and `arm64`).
 - Create a new GitHub Release.
 - Upload the compiled binaries as release assets and automatically generate release notes.
 
