@@ -85,6 +85,32 @@ toolgit
 
 ---
 
+## 🕹️ Basic Usage Tutorial
+
+1. **Select Commits:** Use <kbd>↑</kbd> and <kbd>↓</kbd> (or <kbd>j</kbd>/<kbd>k</kbd>) to navigate the commit list. Press <kbd>Space</kbd> to select individual commits for batch modification, or <kbd>a</kbd> to toggle selection of all commits.
+2. **Edit Author Metadata:** Press <kbd>e</kbd> to open the Author Editor modal. Here you can standardize the name and email for the selected commits.
+3. **Time Shift (Jitter):** Press <kbd>d</kbd> to open the Time & Days Picker. Choose a predefined preset (e.g., "Today Workday") or enter custom dates. This will recalculate the timestamps for the selected commits using the Organic Jitter algorithm.
+4. **Dry-Run & Commit:** Press <kbd>w</kbd> to enter Dry-Run mode. A side-by-side diff will appear displaying the original vs. rewritten commit graph. Confirm by typing "yes" to safely write the changes via Git plumbing.
+
+---
+
+## 📦 Release & Packaging Workflow
+
+`toolgit` includes an automated GitHub Actions pipeline (`.github/workflows/release.yml`) for cross-platform distribution.
+
+To trigger a new release:
+1. Commit your changes and tag the commit with a version number (e.g., `v1.0.0`).
+2. Push the tag to GitHub: `git push origin v1.0.0`
+
+GitHub Actions will automatically:
+- Build optimized, stripped binaries (`-s -w`) for Windows, macOS, and Linux (both `amd64` and `arm64`).
+- Create a new GitHub Release.
+- Upload the compiled binaries as release assets and automatically generate release notes.
+
+*(Alternatively, for local packaging, you can run the included `.\scripts\build\release.ps1` script to cross-compile to a local `/release` folder).*
+
+---
+
 ## 🌿 Organic Time Jitter & Active Days
 
 Unlike naive linear interpolation ($\Delta t = \frac{\text{End} - \text{Start}}{N - 1}$) which creates an artificial grid of commits landing at identical seconds and midnight hours, `toolgit` uses **Organic Developer Simulation**:
