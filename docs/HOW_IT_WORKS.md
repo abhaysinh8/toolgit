@@ -115,16 +115,56 @@ graph LR
 
 ---
 
-## 🖥️ 4. Viewport Windowing & Layout System
+## 🖥️ 4. Responsive Layout & Zero-Scroll Engine
 
-To prevent screen overflow or text wrapping on repositories with 50+ commits:
+`toolgit` features an adaptive, mathematical split-pane layout engine designed to prevent terminal scrollback contamination, line wrapping, or visual distortion across any terminal dimensions or font zoom levels.
 
-| Calculation | Formula | Purpose |
-|---|---|---|
-| **Visible Capacity** | $\text{visibleRows} = \text{paneHeight} - 3$ | Available row count within left pane borders |
-| **Window Start** | $\text{startIdx} = \max(0, \text{cursor} - \text{visibleRows} + 1)$ | Ensures active cursor is always visible |
-| **Available Text Width** | $\text{availMsg} = \text{itemWidth} - 16$ | Space allocated for message preview |
-| **Single-Line Truncation** | $\text{msg} = \text{msg}[:\text{availMsg}-1] + \text{"…"}$ | Guarantees zero multi-line word wrapping |
+```mermaid
+graph TD
+    Term["🖥️ Terminal Dimensions (W x H)"] --> Detect["`term.GetSize(os.Stdout.Fd())`"]
+    Resize["🔍 Zoom In / Out / Resize (tea.WindowSizeMsg)"] --> Detect
+    Detect --> Calc["📐 Proportional Chrome & Printable Space Allocation"]
+    Calc --> Left["Left Pane (44%): Table Viewport<br/>msgCol = leftPrintable - 16"]
+    Calc --> Right["Right Pane (56%): Adaptive Details Card<br/>Responsive SHA & Bounded Message"]
+    Left & Right --> Screen["🖼️ Strict H-Line Frame Assembly (Zero-Scroll Guarantee)"]
+```
+
+### A. Mathematical Dimension Invariants
+
+To guarantee that the terminal emulator buffer never scrolls vertically (which causes flicker and cursor jitter):
+
+| Component | Height Formula | Width Formula | Chrome Accounting |
+|---|---|---|---|
+| **Header Bar** | $1\text{ line}$ | $W\text{ cols}$ | Truncates subtitle on screens $< 70\text{ cols}$ |
+| **Left Pane** | $H - 4\text{ lines (outer)}$<br>$H - 6\text{ lines (inner)}$ | $W_{\text{leftOuter}} = \lfloor W \cdot 0.44 \rfloor$<br>$W_{\text{leftInner}} = W_{\text{leftOuter}} - 2$ | $W_{\text{leftPrintable}} = W_{\text{leftOuter}} - 4$<br>(2 border chars + 2 padding chars) |
+| **Right Pane** | $H - 4\text{ lines (outer)}$<br>$H - 6\text{ lines (inner)}$ | $W_{\text{rightOuter}} = W - W_{\text{leftOuter}}$<br>$W_{\text{rightInner}} = W_{\text{rightOuter}} - 2$ | $W_{\text{rightPrintable}} = W_{\text{rightOuter}} - 4$<br>(2 border chars + 2 padding chars) |
+| **Footer Bar** | $3\text{ lines}$ (gap, status, help) | $W\text{ cols}$ | Responsive badges ($105+$, $75-104$, $<75$ cols) |
+| **Total Frame** | **Exactly $H\text{ lines}$** | **Exactly $W\text{ cols}$** | **$1 + (H - 4) + 3 = H$ lines invariant** |
+
+### B. Dynamic Table Resizing (`bubbles/table`)
+Unlike static tables, `toolgit` dynamically resizes the table viewport and columns inside `resizeUI()`:
+- **Status Column:** 3 chars (`✎ ✓`).
+- **Hash Column:** 7 chars (`8fb0c5f`).
+- **Message Column:** Dynamically scaled:
+  $$W_{\text{msgCol}} = W_{\text{leftPrintable}} - 16$$
+- **Header Separator Fit:** Table total width is strictly clamped to $W_{\text{leftPrintable}}$, preventing the table header separator line (`──────`) from wrapping onto a second row.
+
+### C. Adaptive Right-Pane Cards
+- **Dynamic SHA Length:** Displays full 40-char SHA on wide screens ($\ge 56\text{ cols}$ available); cleanly truncates to short SHA on narrow or zoomed-in displays.
+- **Bounded Message View:** The commit message box has explicit `MaxWidth` and `MaxHeight` bounds derived from available pane lines, ensuring it never overflows the bottom pane border.
+
+### D. Frame Padding & Zero-Scroll Invariant
+At the end of `View()`, the screen lines are clamped and padded to **exactly $H$ lines**:
+```go
+lines := strings.Split(mainView, "\n")
+if len(lines) > m.height {
+    lines = lines[:m.height]
+}
+for len(lines) < m.height {
+    lines = append(lines, "")
+}
+```
+This invariant guarantees that navigation (<kbd>j</kbd>/<kbd>k</kbd>/<kbd>↑</kbd>/<kbd>↓</kbd>) and zooming (<kbd>Ctrl + +</kbd>/<kbd>Ctrl + -</kbd>) never push content into terminal scrollback.
 
 ---
 
@@ -159,7 +199,7 @@ Modals render as centered floating cards using `lipgloss.Place`:
    - Live form navigation with <kbd>Tab</kbd> / <kbd>Shift+Tab</kbd>.
    - Supports single commit or batch updates across all selected commits.
 2. **Time & Active Days Picker (<kbd>d</kbd>)**:
-   - Presets (*Today Workday*, *Yesterday Workday*, *Past 3h*, *Past 8h*).
+   - Interactive dropdown radio presets (*Today Workday*, *Yesterday Workday*, *Past 3h*, *Past 8h*, *Custom Range...*).
    - Custom Range mode with Start Date, End Date, and Active Days fields.
    - Dynamic real-time preview of calendar days and active days distribution.
 3. **Dry-Run Diff Review (<kbd>w</kbd>)**:
@@ -167,7 +207,7 @@ Modals render as centered floating cards using `lipgloss.Place`:
    - Safety backup notice and confirmation guard.
    - Asynchronous background execution with live loading spinner feedback.
 4. **Safety Rollback (<kbd>r</kbd>)**:
-   - Menu of timestamped automatic safety backup branches.
+   - Menu of timestamped automatic safety backup branches (`toolgit-backup-<timestamp>`).
    - Restores branch synchronously inside a background goroutine with visual loading spinner.
 
 ---
@@ -176,9 +216,9 @@ Modals render as centered floating cards using `lipgloss.Place`:
 
 | Script | Command | Purpose |
 |---|---|---|
-| **Fast Build & Update** | `.\update.ps1` | Runs test suite, compiles `toolgit.exe`, and updates global `go install` |
-| **Skip-Tests Build** | `.\update.ps1 -SkipTests` | Rapid local compile and install |
-| **File Watcher** | `.\watch.ps1` | Auto-detects `.go` file saves and updates global CLI in real time |
-| **Batch Helper** | `.\update.cmd` | Command Prompt wrapper for Windows CMD |
+| **Fast Build & Update** | `.\scripts\build\update.ps1` | Runs test suite, compiles `toolgit.exe`, and updates global `go install` |
+| **Skip-Tests Build** | `.\scripts\build\update.ps1 -SkipTests` | Rapid local compile and install |
+| **File Watcher** | `.\scripts\dev\watch.ps1` | Auto-detects `.go` file saves and updates global CLI in real time |
+| **Batch Helper** | `.\scripts\build\update.cmd` | Command Prompt wrapper for Windows CMD |
 
 Global CLI executable is registered at `%GOPATH%\bin\toolgit.exe` and is accessible anywhere from your system terminal.

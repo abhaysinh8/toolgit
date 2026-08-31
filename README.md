@@ -29,11 +29,11 @@
 
 | Feature | Description |
 |---|---|
-| 🖥️ **Split-Pane Layout** | **Left (~48%)**: Smooth windowed commit list with selection markers (`[✓]`) and edit flags (`✎`). Footer includes dynamic cursor tracking (e.g. `[5/51]`).<br>**Right (~52%)**: Metadata card showing Full SHA, Author, Email, Timestamps, Relative Age, and message quote block. |
+| 🖥️ **Adaptive Split-Pane** | Mathematical zero-scroll layout engine with dynamic zoom in/out (<kbd>Ctrl + +</kbd>/<kbd>Ctrl + -</kbd>) support. **Left (~44%)**: Dynamic responsive table with selection markers (`[✓]`) and edit flags (`✎`). **Right (~56%)**: Adaptive metadata card showing SHA, Author, Email, Timestamps, Relative Age, and bounded message box. |
 | 🌿 **Organic Human Jitter** | Eliminates robotic mathematical steps and identical `:00` seconds with natural gap variance and randomized seconds. |
 | 📅 **Multi-Day Active Days** | Partition commits across a chosen number of active days (e.g. 22 commits over 10 distinct days) during daytime hours. |
 | 👤 **Interactive Author Editor** | Edit Author Name and Email for single commits or in batch across all selected commits with live form navigation. |
-| ⏳ **Smart Time Range Picker** | Instant presets (*"Today Workday"*, *"Yesterday Workday"*, *"Past 3h"*, *"Past 8h"*) plus full custom date range controls. |
+| ⏳ **Smart Time Range Picker** | Dropdown radio presets (*"Today Workday"*, *"Yesterday Workday"*, *"Past 3h"*, *"Past 8h"*, *"Custom Range..."*) with real-time active days calculation. |
 | 🛡️ **Non-Destructive Dry-Run** | Side-by-side diff inspection with **automatic safety backup branches** (`toolgit-backup-<timestamp>`) before any rewrite. |
 | 🔄 **Async Rollback Engine** | Menu of previous safety backups with animated async loading overlay when restoring history. |
 | ⚡ **Live Dev Toolchain** | Fast build script (`scripts/build/update.ps1`) and file watcher (`scripts/dev/watch.ps1`) for automatic hot rebuilding on save. |
@@ -52,6 +52,7 @@
 | <kbd>d</kbd> | **Time Picker** | Open the Time Distribution & Active Days picker modal |
 | <kbd>t</kbd> | **Quick 9-to-5** | Quick-distribute selected commits between 09:00 AM – 05:00 PM today |
 | <kbd>w</kbd> | **Dry-Run Review** | Open the side-by-side diff review modal and confirm rewrite |
+| <kbd>r</kbd> | **Rollback Menu** | Open safety rollback menu to restore a previous backup branch |
 | <kbd>q</kbd> / <kbd>Esc</kbd> | **Quit / Back** | Close active modal or quit the application |
 | <kbd>Ctrl+C</kbd> | **Force Exit** | Instant clean process shutdown |
 
