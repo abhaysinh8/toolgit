@@ -9,6 +9,7 @@ import (
 	"toolgit/internal/git"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // TestUserJourneySimulation simulates a complete interactive session of a user using toolgit.
@@ -233,5 +234,156 @@ func TestRealRepoUserWorkflow(t *testing.T) {
 	logOut := runGit("log", "-1", "--format=%an <%ae>")
 	if !strings.Contains(logOut, "Dev Modified <dev@modified.org>") {
 		t.Errorf("expected git log to reflect 'Dev Modified', got: %s", logOut)
+	}
+}
+
+func TestTUIDimensionsAndZeroScrolling(t *testing.T) {
+	sizes := [][2]int{
+		{50, 15}, // Extreme zoom in
+		{65, 20}, // Zoomed in
+		{80, 24}, // Standard terminal
+		{100, 30}, // Medium terminal
+		{120, 40}, // Large terminal
+		{160, 50}, // Zoomed out
+	}
+	modals := []ActiveModal{
+		ModalNone,
+		ModalEditAuthor,
+		ModalTimeShift,
+		ModalDryRun,
+		ModalRollback,
+	}
+
+	for _, sz := range sizes {
+		w, h := sz[0], sz[1]
+		for _, mod := range modals {
+			m := initialModel()
+			// Simulate dynamic window resize / zoom event
+			newM, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
+			m = newM.(model)
+			m.activeModal = mod
+			if mod == ModalEditAuthor {
+				m.authorModal = NewEditAuthorModal("Test Author", "test@example.com", 1, false)
+			} else if mod == ModalTimeShift {
+				m.timeModal = NewTimePickerModal(1)
+			} else if mod == ModalDryRun {
+				m.dryRunModal = DryRunModal{
+					Diffs:      git.GenerateDryRunDiff(m.commits),
+					IsRealRepo: false,
+				}
+			} else if mod == ModalRollback {
+				m.rollbackModal = NewRollbackModal([]string{"toolgit-backup-test"})
+			}
+
+			// Test across multiple commit cursor positions (scrolling up/down)
+			for cursor := 0; cursor < len(m.commits); cursor++ {
+				m.table.SetCursor(cursor)
+				view := m.View()
+				lines := strings.Split(view, "\n")
+				if len(lines) > h {
+					t.Fatalf("Size %dx%d Cursor %d Modal %v rendered %d lines (expected <= %d)", w, h, cursor, mod, len(lines), h)
+				}
+				for i, line := range lines {
+					lineWidth := lipgloss.Width(line)
+					if lineWidth > w {
+						t.Fatalf("Size %dx%d Cursor %d Modal %v Line %d width %d exceeds terminal width %d:\n%s", w, h, cursor, mod, i, lineWidth, w, line)
+					}
+				}
+				if mod != ModalNone {
+					break // Modals don't need cursor iteration
+				}
+			}
+		}
+	}
+}
+
+func TestLipglossChrome(t *testing.T) {
+	w, h := 80, 24
+	leftOuterWidth := (w * 44) / 100 // 35
+	rightOuterWidth := w - leftOuterWidth // 45
+	paneInnerHeight := h - 6 // 18
+
+	leftStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(0, 1).
+		Width(leftOuterWidth - 2).
+		Height(paneInnerHeight)
+
+	rightStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(0, 1).
+		Width(rightOuterWidth - 2).
+		Height(paneInnerHeight)
+
+	lp := leftStyle.Render("Left Content")
+	rp := rightStyle.Render("Right Content")
+
+	t.Logf("LeftPane outer width: %d, height: %d", lipgloss.Width(lp), lipgloss.Height(lp))
+	t.Logf("RightPane outer width: %d, height: %d", lipgloss.Width(rp), lipgloss.Height(rp))
+
+	body := lipgloss.JoinHorizontal(lipgloss.Top, lp, rp)
+	t.Logf("Body outer width: %d, height: %d", lipgloss.Width(body), lipgloss.Height(body))
+
+	if lipgloss.Width(body) != w {
+		t.Fatalf("Expected body width %d, got %d", w, lipgloss.Width(body))
+	}
+	if lipgloss.Height(body) != h-4 {
+		t.Fatalf("Expected body height %d, got %d", h-4, lipgloss.Height(body))
+	}
+}
+
+func TestScrollUpDownStepByStep(t *testing.T) {
+	sizes := [][2]int{
+		{80, 24},
+		{100, 30},
+		{60, 18},
+	}
+
+	for _, sz := range sizes {
+		w, h := sz[0], sz[1]
+		m := initialModel()
+		newM, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
+		m = newM.(model)
+
+		// Send Down key 30 times
+		downKey := tea.KeyMsg{Type: tea.KeyDown}
+		for step := 0; step < 30; step++ {
+			newM, _ = m.Update(downKey)
+			m = newM.(model)
+
+			view := m.View()
+			lines := strings.Split(view, "\n")
+			if len(lines) != h {
+				for idx, l := range lines {
+					t.Logf("[%02d] (len %d): %s", idx, lipgloss.Width(l), l)
+				}
+				t.Fatalf("Size %dx%d Step Down %d: line count is %d, expected exactly %d", w, h, step, len(lines), h)
+			}
+			for i, line := range lines {
+				lw := lipgloss.Width(line)
+				if lw > w {
+					t.Fatalf("Size %dx%d Step Down %d Line %d: width is %d, expected <= %d:\n%s", w, h, step, i, lw, w, line)
+				}
+			}
+		}
+
+		// Send Up key 30 times
+		upKey := tea.KeyMsg{Type: tea.KeyUp}
+		for step := 0; step < 30; step++ {
+			newM, _ = m.Update(upKey)
+			m = newM.(model)
+
+			view := m.View()
+			lines := strings.Split(view, "\n")
+			if len(lines) != h {
+				t.Fatalf("Size %dx%d Step Up %d: line count is %d, expected exactly %d", w, h, step, len(lines), h)
+			}
+			for i, line := range lines {
+				lw := lipgloss.Width(line)
+				if lw > w {
+					t.Fatalf("Size %dx%d Step Up %d Line %d: width is %d, expected <= %d:\n%s", w, h, step, i, lw, w, line)
+				}
+			}
+		}
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/term"
 
 	"toolgit/internal/core"
 	"toolgit/internal/git"
@@ -291,7 +292,7 @@ var (
 	detailKeyStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("#A1A1AA")).
-			Width(14)
+			Width(11)
 
 	detailValStyle = lipgloss.NewStyle().
 			Foreground(textColor)
@@ -426,6 +427,12 @@ func initialModel() model {
 		statusMsg = "Mock Mode (No Git repo found). Changes will be simulated."
 	}
 
+	termW, termH, err := term.GetSize(os.Stdout.Fd())
+	if err != nil || termW <= 0 || termH <= 0 {
+		termW = 80
+		termH = 24
+	}
+
 	m := model{
 		commits:       commits,
 		table:         t,
@@ -436,12 +443,64 @@ func initialModel() model {
 		isRealRepo:    isReal,
 		currentBranch: branch,
 		activeModal:   ModalNone,
+		width:         termW,
+		height:        termH,
 	}
-	m.updateTable()
+	m.resizeUI()
 	return m
 }
 
+func (m *model) resizeUI() {
+	if m.width < 40 {
+		m.width = 40
+	}
+	if m.height < 10 {
+		m.height = 10
+	}
+
+	paneInnerHeight := m.height - 6
+	if paneInnerHeight < 4 {
+		paneInnerHeight = 4
+	}
+
+	leftOuterWidth := (m.width * 44) / 100
+	if leftOuterWidth < 28 {
+		leftOuterWidth = 28
+	}
+
+	leftPrintableWidth := leftOuterWidth - 4
+	if leftPrintableWidth < 24 {
+		leftPrintableWidth = 24
+	}
+
+	tableDataHeight := paneInnerHeight - 2
+	if tableDataHeight < 1 {
+		tableDataHeight = 1
+	}
+
+	m.table.SetHeight(tableDataHeight)
+	m.table.SetWidth(leftPrintableWidth)
+
+	msgColWidth := leftPrintableWidth - 16
+	if msgColWidth < 6 {
+		msgColWidth = 6
+	}
+
+	m.table.SetColumns([]table.Column{
+		{Title: " ", Width: 3},
+		{Title: "Hash", Width: 7},
+		{Title: "Message", Width: msgColWidth},
+	})
+	m.updateTable()
+}
+
 func (m *model) updateTable() {
+	cols := m.table.Columns()
+	maxMsgLen := 45
+	if len(cols) >= 3 && cols[2].Width > 3 {
+		maxMsgLen = cols[2].Width
+	}
+
 	var rows []table.Row
 	for _, c := range m.commits {
 		shortHash := c.Hash
@@ -459,8 +518,12 @@ func (m *model) updateTable() {
 		status := fmt.Sprintf("%s %s", modMarker, check)
 
 		msg := c.Message
-		if len(msg) > 50 {
-			msg = msg[:47] + "..."
+		if len(msg) > maxMsgLen {
+			if maxMsgLen > 3 {
+				msg = msg[:maxMsgLen-3] + "..."
+			} else {
+				msg = msg[:maxMsgLen]
+			}
 		}
 		rows = append(rows, table.Row{status, shortHash, msg})
 	}
@@ -494,6 +557,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.resizeUI()
 		return m, nil
 
 	case spinner.TickMsg:
@@ -866,22 +930,33 @@ func (m model) View() string {
 		m.height = 30
 	}
 
-	// Layout dimensions (reduced by 1 line to prevent Windows scrolling)
-	headerHeight := 1
-	footerHeight := 3
-	paneHeight := m.height - headerHeight - footerHeight - 1
-	if paneHeight < 8 {
-		paneHeight = 8
+	// Layout dimensions:
+	// Total screen height = m.height
+	// Header = 1 line
+	// Footer = 3 lines (" ", statusLine, helpBar)
+	// Pane borders (top + bottom) = 2 lines
+	// So inner content height = m.height - 1 - 3 - 2 = m.height - 6
+	paneInnerHeight := m.height - 6
+	if paneInnerHeight < 4 {
+		paneInnerHeight = 4
 	}
 
-	// Balanced proportional split: Commit list gets ~48% width, details get ~52%
-	leftWidth := (m.width * 48) / 100
-	if leftWidth < 38 {
-		leftWidth = 38
+	leftOuterWidth := (m.width * 44) / 100
+	if leftOuterWidth < 28 {
+		leftOuterWidth = 28
 	}
-	rightWidth := m.width - leftWidth - 2
-	if rightWidth < 36 {
-		rightWidth = 36
+	rightOuterWidth := m.width - leftOuterWidth
+	if rightOuterWidth < 28 {
+		rightOuterWidth = 28
+	}
+
+	leftPrintableWidth := leftOuterWidth - 4
+	if leftPrintableWidth < 24 {
+		leftPrintableWidth = 24
+	}
+	rightPrintableWidth := rightOuterWidth - 4
+	if rightPrintableWidth < 24 {
+		rightPrintableWidth = 24
 	}
 
 	// 1. Header Bar
@@ -896,10 +971,14 @@ func (m model) View() string {
 		repoBadge = mockBadge.Render(" 🧪 Mock Mode ")
 	}
 
-	headerLeft := titleBadge.Render(" ❖ toolgit ") + " " +
-		lipgloss.NewStyle().Foreground(subtleColor).Render("Safe Git Commit Metadata Editor")
+	headerLeft := titleBadge.Render(" ❖ toolgit ")
+	if m.width >= 70 {
+		headerLeft += " " + lipgloss.NewStyle().Foreground(subtleColor).Render("Safe Git Commit Metadata Editor")
+	}
 
-	headerGap := m.width - lipgloss.Width(headerLeft) - lipgloss.Width(repoBadge) - 2
+	badgeW := lipgloss.Width(repoBadge)
+	leftW := lipgloss.Width(headerLeft)
+	headerGap := m.width - leftW - badgeW
 	if headerGap < 1 {
 		headerGap = 1
 	}
@@ -908,23 +987,32 @@ func (m model) View() string {
 		strings.Repeat(" ", headerGap),
 		repoBadge,
 	)
+	if lipgloss.Width(header) > m.width {
+		header = lipgloss.NewStyle().MaxWidth(m.width).Render(header)
+	}
 
 	// 2. Left Pane (Commit List with table)
-	// table.Height sets the number of data rows.
-	// The table also renders a header (1 line) and a header bottom border (1 line).
-	// To fit within activePaneBorder (which adds 2 lines of border),
-	// the table data rows should be paneHeight - 4.
-	tableHeight := paneHeight - 4
-	if tableHeight < 1 {
-		tableHeight = 1
+	tableDataHeight := paneInnerHeight - 2 // 1 line for header + 1 line for header border
+	if tableDataHeight < 1 {
+		tableDataHeight = 1
 	}
-	m.table.SetHeight(tableHeight)
-	m.table.SetWidth(leftWidth - 2)
+	m.table.SetHeight(tableDataHeight)
+	m.table.SetWidth(leftPrintableWidth)
+
+	msgColWidth := leftPrintableWidth - 16
+	if msgColWidth < 6 {
+		msgColWidth = 6
+	}
+	m.table.SetColumns([]table.Column{
+		{Title: " ", Width: 3},
+		{Title: "Hash", Width: 7},
+		{Title: "Message", Width: msgColWidth},
+	})
 
 	listContent := m.table.View()
 	leftPane := activePaneBorder.
-		Width(leftWidth).
-		Height(paneHeight).
+		Width(leftOuterWidth - 2).
+		Height(paneInnerHeight).
 		Render(listContent)
 
 	// 3. Right Pane (Commit Details)
@@ -968,18 +1056,47 @@ func (m model) View() string {
 		if len(shortHash) > 7 {
 			shortHash = shortHash[:7]
 		}
-		detailHeader := lipgloss.JoinHorizontal(
-			lipgloss.Center,
-			detailHeaderStyle.Render("Commit "+shortHash),
-			"  ",
-			statusBadge,
-			"  ",
-			selBadge,
-		)
+		detailTitle := detailHeaderStyle.Render("Commit " + shortHash)
+		badges := lipgloss.JoinHorizontal(lipgloss.Left, statusBadge, "  ", selBadge)
 
-		msgBoxWidth := rightWidth - 6
-		if msgBoxWidth < 20 {
-			msgBoxWidth = 20
+		var headerBlock string
+		if rightPrintableWidth >= lipgloss.Width(detailTitle)+lipgloss.Width(badges)+4 {
+			headerBlock = lipgloss.JoinHorizontal(lipgloss.Center, detailTitle, "  ", badges)
+		} else {
+			headerBlock = lipgloss.JoinVertical(lipgloss.Left, detailTitle, badges)
+		}
+
+		maxValW := rightPrintableWidth - 11
+		if maxValW < 10 {
+			maxValW = 10
+		}
+
+		shaDisplay := cur.Hash
+		if maxValW < 40 {
+			if maxValW >= 8 {
+				shaDisplay = cur.Hash[:maxValW]
+			}
+		}
+
+		details := []string{
+			headerBlock,
+			"",
+			renderDetailRow("SHA:", hashStyle.Render(shaDisplay), maxValW),
+			renderDetailRow("Author:", detailValStyle.Render(cur.AuthorName), maxValW),
+			renderDetailRow("Email:", detailValStyle.Render(cur.AuthorEmail), maxValW),
+			renderDetailRow("Date:", detailValStyle.Render(cur.Timestamp.Format("Mon Jan 02, 2006 • 15:04")), maxValW),
+			renderDetailRow("Relative:", detailValStyle.Render(formatRelativeTime(cur.Timestamp)), maxValW),
+			"",
+			lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#A1A1AA")).Render("Message:"),
+		}
+
+		msgBoxWidth := rightPrintableWidth - 2
+		if msgBoxWidth < 10 {
+			msgBoxWidth = 10
+		}
+		msgBoxHeight := paneInnerHeight - len(details) - 1
+		if msgBoxHeight < 2 {
+			msgBoxHeight = 2
 		}
 
 		msgBox := lipgloss.NewStyle().
@@ -987,34 +1104,29 @@ func (m model) View() string {
 			BorderForeground(highlightColor).
 			Padding(0, 1).
 			Width(msgBoxWidth).
+			MaxWidth(msgBoxWidth).
+			Height(msgBoxHeight).
+			MaxHeight(msgBoxHeight).
 			Foreground(textColor).
 			Render(cur.Message)
 
-		details := []string{
-			detailHeader,
-			"",
-			renderDetailRow("Full SHA:", hashStyle.Render(cur.Hash)),
-			renderDetailRow("Author:", detailValStyle.Render(cur.AuthorName)),
-			renderDetailRow("Email:", detailValStyle.Render(cur.AuthorEmail)),
-			renderDetailRow("Date:", detailValStyle.Render(cur.Timestamp.Format("Mon Jan 02, 2006 • 15:04:05 MST"))),
-			renderDetailRow("Relative:", detailValStyle.Render(formatRelativeTime(cur.Timestamp))),
-			"",
-			lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#A1A1AA")).Render("Message:"),
-			msgBox,
-		}
+		details = append(details, msgBox)
 		rightPaneContent = lipgloss.JoinVertical(lipgloss.Left, details...)
 	} else {
 		rightPaneContent = detailValStyle.Render("No commit selected.")
 	}
 
 	rightPane := inactivePaneBorder.
-		Width(rightWidth).
-		Height(paneHeight).
+		Width(rightOuterWidth - 2).
+		Height(paneInnerHeight).
 		Render(rightPaneContent)
 
 	body := lipgloss.JoinHorizontal(lipgloss.Top, leftPane, rightPane)
+	if lipgloss.Width(body) > m.width {
+		body = lipgloss.NewStyle().MaxWidth(m.width).Render(body)
+	}
 
-	// 4. Footer: Status Line + Help Key Badges
+	// 4. Footer: Status Line + Responsive Help Bar
 	statusIcon := lipgloss.NewStyle().Foreground(accentColor).Render("●")
 	if !m.statusOk {
 		statusIcon = lipgloss.NewStyle().Foreground(warnColor).Render("▲")
@@ -1026,13 +1138,20 @@ func (m model) View() string {
 			selectedCount++
 		}
 	}
+	cursorNum := 0
+	if len(m.commits) > 0 {
+		cursorNum = m.table.Cursor() + 1
+	}
 	countsInfo := lipgloss.NewStyle().Foreground(subtleColor).Render(
-		fmt.Sprintf("[%d/%d]  [%d selected]", m.table.Cursor()+1, len(m.commits), selectedCount),
+		fmt.Sprintf("[%d/%d]  [%d selected]", cursorNum, len(m.commits), selectedCount),
 	)
 
 	statusLine := fmt.Sprintf("%s %s  %s", statusIcon, m.status, countsInfo)
+	if lipgloss.Width(statusLine) > m.width {
+		statusLine = lipgloss.NewStyle().MaxWidth(m.width).Render(statusLine)
+	}
 
-	// Help Bar matching original clean style
+	// Responsive Help Bar
 	helpKeyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#F38BA8")).Bold(true)
 	helpDescStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#A1A1AA"))
 
@@ -1040,18 +1159,54 @@ func (m model) View() string {
 		return fmt.Sprintf("%s %s", helpKeyStyle.Render(key), helpDescStyle.Render(desc))
 	}
 
-	helpBar := lipgloss.JoinHorizontal(lipgloss.Left,
-		renderBtn("space", "select"), " • ",
-		renderBtn("a", "select all"), " • ",
-		renderBtn("e", "edit author"), " • ",
-		renderBtn("d", "distribute times"), " • ",
-		renderBtn("w", "apply/dry-run"), " • ",
-		renderBtn("r", "rollback"), " • ",
-		renderBtn("q", "quit"),
-	)
+	var helpBar string
+	if m.width >= 105 {
+		helpBar = lipgloss.JoinHorizontal(lipgloss.Left,
+			renderBtn("space", "select"), " • ",
+			renderBtn("a", "select all"), " • ",
+			renderBtn("e", "edit author"), " • ",
+			renderBtn("d", "distribute times"), " • ",
+			renderBtn("w", "apply/dry-run"), " • ",
+			renderBtn("r", "rollback"), " • ",
+			renderBtn("q", "quit"),
+		)
+	} else if m.width >= 75 {
+		helpBar = lipgloss.JoinHorizontal(lipgloss.Left,
+			renderBtn("space", "sel"), " • ",
+			renderBtn("a", "all"), " • ",
+			renderBtn("e", "edit"), " • ",
+			renderBtn("d", "times"), " • ",
+			renderBtn("w", "apply"), " • ",
+			renderBtn("r", "rollback"), " • ",
+			renderBtn("q", "quit"),
+		)
+	} else {
+		helpBar = lipgloss.JoinHorizontal(lipgloss.Left,
+			renderBtn("space", "sel"), " • ",
+			renderBtn("e", "edit"), " • ",
+			renderBtn("d", "times"), " • ",
+			renderBtn("w", "apply"), " • ",
+			renderBtn("q", "quit"),
+		)
+	}
 
 	footer := lipgloss.JoinVertical(lipgloss.Left, " ", statusLine, helpBar)
 	mainView := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
+
+	// Ensure view strictly fits within m.height and m.width
+	lines := strings.Split(mainView, "\n")
+	if len(lines) > m.height {
+		lines = lines[:m.height]
+	}
+	for i := range lines {
+		if lipgloss.Width(lines[i]) > m.width {
+			lines[i] = lipgloss.NewStyle().MaxWidth(m.width).Render(lines[i])
+		}
+	}
+	for len(lines) < m.height {
+		lines = append(lines, "")
+	}
+	mainView = strings.Join(lines, "\n")
 
 	// 5. Render Modal Overlay if active
 	if m.activeModal != ModalNone {
@@ -1073,9 +1228,9 @@ func (m model) View() string {
 	return mainView
 }
 
-// placeOverlay renders modalView centered on screen
+// placeOverlay renders modalView centered on screen, strictly clamped to width and height
 func placeOverlay(width, height int, modalView string) string {
-	return lipgloss.Place(
+	res := lipgloss.Place(
 		width,
 		height,
 		lipgloss.Center,
@@ -1083,10 +1238,24 @@ func placeOverlay(width, height int, modalView string) string {
 		modalView,
 		lipgloss.WithWhitespaceChars(" "),
 	)
+	lines := strings.Split(res, "\n")
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	for i := range lines {
+		if lipgloss.Width(lines[i]) > width {
+			lines[i] = lipgloss.NewStyle().MaxWidth(width).Render(lines[i])
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
-func renderDetailRow(key, val string) string {
-	return lipgloss.JoinHorizontal(lipgloss.Top, detailKeyStyle.Render(key), val)
+func renderDetailRow(key, val string, maxValWidth int) string {
+	k := detailKeyStyle.Render(key)
+	if maxValWidth > 0 && lipgloss.Width(val) > maxValWidth {
+		val = lipgloss.NewStyle().MaxWidth(maxValWidth).Render(val)
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, k, val)
 }
 
 func formatRelativeTime(t time.Time) string {
