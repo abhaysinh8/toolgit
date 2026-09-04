@@ -18,6 +18,8 @@ func TestUserJourneySimulation(t *testing.T) {
 	m := initialModel()
 	// Force mock mode so we don't accidentally rewrite the real toolgit repo during testing
 	m.isRealRepo = false
+	m.commits = generateMockCommits()
+	m.updateTable()
 	if len(m.commits) == 0 {
 		t.Fatalf("expected initial commits to be populated")
 	}
