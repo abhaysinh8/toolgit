@@ -3,7 +3,7 @@
 Fast, non-destructive Terminal User Interface (TUI) for inspecting, modifying, and batch-distributing Git commit metadata.
 
 [![CI](https://github.com/abhaysinh8/toolgit/actions/workflows/ci.yml/badge.svg)](https://github.com/abhaysinh8/toolgit/actions/workflows/ci.yml)
-[![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat-square&logo=go)](https://go.dev/)
+[![Go Version](https://img.shields.io/badge/Go-1.26.5-00ADD8?style=flat-square&logo=go)](https://go.dev/)
 [![Bubble Tea](https://img.shields.io/badge/TUI-Bubble%20Tea-7D56F4?style=flat-square)](https://github.com/charmbracelet/bubbletea)
 [![Lip Gloss](https://img.shields.io/badge/Style-Lip%20Gloss-04B575?style=flat-square)](https://github.com/charmbracelet/lipgloss)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-blue?style=flat-square)](#installation)
@@ -14,7 +14,7 @@ Fast, non-destructive Terminal User Interface (TUI) for inspecting, modifying, a
 
 `toolgit` is an interactive terminal application designed to inspect, edit, and reorganize Git commit history without the overhead and risks associated with interactive rebase (`git rebase -i`) or external filter scripts.
 
-Powered by [Bubble Tea](https://github.com/charmbracelet/bubbletea) and [Lip Gloss](https://github.com/charmbracelet/lipgloss), `toolgit` provides an adaptive split-pane terminal dashboard for navigating commit logs, editing author and committer metadata in batch, distributing timestamps across realistic active workdays, and safely rewriting commit graphs via low-level Git plumbing. Every rewrite automatically creates an isolated backup branch, allowing instant one-key rollbacks.
+Powered by [Bubble Tea](https://github.com/charmbracelet/bubbletea) and [Lip Gloss](https://github.com/charmbracelet/lipgloss), `toolgit` provides an adaptive split-pane terminal dashboard for navigating commit logs, editing author metadata in batch, distributing author timestamps across realistic active workdays, and safely rewriting commit graphs via low-level Git plumbing. Original committer metadata is preserved, and every rewrite automatically creates a branch-scoped backup for confirmed rollback.
 
 ## Features
 
@@ -23,11 +23,11 @@ Powered by [Bubble Tea](https://github.com/charmbracelet/bubbletea) and [Lip Glo
 - **Topology-Preserving Non-Linear History**: Full merge commit awareness. Reconstructs multi-parent linkage during history rewrites (`git commit-tree -p ...`), displaying distinct indicators (`M` in table, `⑂ MERGE` badge in detail card, and resolved parent SHA lists).
 - **Organic Timestamp Jitter**: Avoids artificial linear spacing and synthetic `:00` seconds. Uses weighted interval distribution and micro-variance to generate natural commit gaps (20 minutes to multiple hours) and realistic seconds.
 - **Multi-Day Workday Partitioning**: Automatically distributes commit batches across a configurable number of distinct active days, respecting daytime working hours (e.g., 09:00 to 17:00) and natural rest intervals.
-- **Batch Author and Committer Editing**: Modify author name and email address for a single commit or in batch across all selected commits.
+- **Batch Author Editing**: Modify author name and email address for a single commit or in batch across all selected commits while preserving the original committer identity and timestamp.
 - **Time Range Presets**: Built-in presets for common intervals ("Today Workday", "Yesterday Workday", "Past 3 Hours", "Past 8 Hours") alongside custom date and time range inputs.
 - **Side-by-Side Dry-Run Review**: Visual diff preview displaying original commit metadata against proposed modifications before changes are written to the repository.
 - **Non-Destructive Git Plumbing**: Leverages direct `git commit-tree` and `git update-ref` calls. Bypasses the working tree and index entirely, ensuring uncommitted files remain untouched.
-- **Automated Safety Backups and Rollback**: Creates an automated snapshot branch (`toolgit-backup-<timestamp>`) before any rewrite. An integrated rollback menu allows instant restoration of previous commit states.
+- **Automated Safety Backups and Rollback**: Creates an automated snapshot branch (`toolgit-backup-<timestamp>`) before any rewrite. Backups are associated with their source branch; rollback requires confirmation and refuses to run while the working tree or index is dirty.
 - **Mock Mode**: Automatically loads simulated commit data when executed outside a Git repository, allowing full TUI evaluation without repository setup.
 
 ## Table of Contents
@@ -47,7 +47,7 @@ Powered by [Bubble Tea](https://github.com/charmbracelet/bubbletea) and [Lip Glo
 
 ### Prerequisites
 
-- [Go 1.21](https://go.dev/dl/) or newer
+- [Go 1.26.5](https://go.dev/dl/) or newer
 - [Git](https://git-scm.com/) installed and available in your system `PATH`
 
 ### Build from Source
@@ -58,7 +58,7 @@ git clone https://github.com/abhaysinh8/toolgit.git
 cd toolgit
 
 # Compile binary with stripped symbols
-go build -ldflags "-s -w" -o toolgit.exe ./cmd/toolgit
+go build -ldflags "-s -w" ./cmd/toolgit
 ```
 
 ### Install with Go
@@ -83,7 +83,7 @@ The repository includes an installer script that verifies the environment, execu
 
 ### Pre-built Releases
 
-Compiled standalone binaries for Windows (`amd64` and `arm64`) are published automatically on the [GitHub Releases](https://github.com/abhaysinh8/toolgit/releases) page for each tagged release.
+Compiled standalone binaries for Windows, Linux, and macOS (`amd64` and `arm64`) are published automatically on the [GitHub Releases](https://github.com/abhaysinh8/toolgit/releases) page for each tagged release.
 
 ---
 
@@ -119,8 +119,7 @@ toolgit -b main
 
 ### 3. Timestamp Distribution
 - Select the target commits.
-- Press <kbd>t</kbd> to quick-distribute selected commits across standard workday hours (09:00 to 17:00) for the current day.
-- Or press <kbd>d</kbd> to open the Time Distribution modal:
+- Press <kbd>d</kbd> to open the Time Distribution modal:
   - Choose a preset (e.g., "Today Workday", "Yesterday Workday", "Past 3h", "Past 8h").
   - Or select "Custom Range..." to define specific start and end timestamps along with the target number of active days.
   - Commits are redistributed using organic jitter, ensuring strict chronological monotonicity and randomized second offsets.
@@ -132,8 +131,8 @@ toolgit -b main
 
 ### 5. Rollback and History Restoration
 - Press <kbd>r</kbd> to open the Rollback menu.
-- A list of previous backup branches (`toolgit-backup-<timestamp>`) will be shown.
-- Select a backup branch and press <kbd>Enter</kbd> to restore `HEAD` to that snapshot.
+- Backups created for the current branch (`toolgit-backup-<timestamp>`) will be shown.
+- Select a backup, press <kbd>Enter</kbd>, then confirm to restore `HEAD` to that snapshot. Rollback is refused if Git has uncommitted changes.
 
 ### 6. Branch Switching
 - If the repository has multiple local branches, `toolgit` displays an interactive fuzzy picker upon launch.
@@ -152,7 +151,6 @@ toolgit -b main
 | <kbd>a</kbd> | Select All | Toggle selection across all commits |
 | <kbd>e</kbd> | Edit Author | Open Author Name and Email editor modal |
 | <kbd>d</kbd> | Time Picker | Open Time Distribution and Active Days modal |
-| <kbd>t</kbd> | Quick Workday | Distribute selected commits between 09:00 and 17:00 today |
 | <kbd>b</kbd> | Switch Branch | Open in-TUI branch switcher modal with fuzzy search |
 | <kbd>w</kbd> | Dry-Run Review | Open side-by-side diff review and confirm rewrite |
 | <kbd>r</kbd> | Rollback Menu | Browse and restore safety backup branches |
@@ -187,7 +185,7 @@ sequenceDiagram
 
 1. **Working Tree Isolation**: All new commit objects are synthesized directly in the Git repository database via `git commit-tree`. Unstaged changes, staged index entries, and untracked files are never touched.
 2. **Atomic Reference Updates**: Upon computing the revised commit DAG, the branch reference is updated atomically via `git update-ref`.
-3. **Pre-Rewrite Safety Backups**: Prior to executing any ref update, `toolgit` captures the current branch state into a timestamped snapshot (`refs/heads/toolgit-backup-<timestamp>`).
+3. **Pre-Rewrite Safety Backups**: Prior to executing any ref update, `toolgit` captures the current branch state into a timestamped snapshot (`refs/heads/toolgit-backup-<timestamp>`) and records its source branch. The integrated rollback path only exposes backups for the current branch and refuses dirty working trees.
 
 ### Organic Timestamp Simulation
 
@@ -222,7 +220,7 @@ A PowerShell file watcher script is included to recompile and test on file save:
 
 ### Packaging and Release Automation
 
-Releases are managed via GitHub Actions (`.github/workflows/release.yml`). Pushing a semantic version tag triggers cross-compilation for Windows (`amd64` and `arm64`) and publishes assets to GitHub Releases:
+Releases are managed via GitHub Actions (`.github/workflows/release.yml`). Pushing a semantic version tag triggers cross-compilation for Windows, Linux, and macOS (`amd64` and `arm64`) and publishes assets to GitHub Releases:
 
 ```bash
 git tag v1.0.0
@@ -261,4 +259,3 @@ toolgit/
 
 - [HOW_IT_WORKS.md](./docs/HOW_IT_WORKS.md) - Deep-dive into internal mechanics, mathematical distribution equations, and viewport windowing algorithms.
 - [MULTI_AUTHOR_PROPOSAL.md](./docs/MULTI_AUTHOR_PROPOSAL.md) - Design proposal for contributor rosters, pair-programming distribution, and `Co-authored-by` trailer support.
-

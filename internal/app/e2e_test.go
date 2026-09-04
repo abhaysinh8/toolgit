@@ -15,11 +15,7 @@ import (
 // TestUserJourneySimulation simulates a complete interactive session of a user using toolgit.
 func TestUserJourneySimulation(t *testing.T) {
 	// 1. Initialize Model
-	m := initialModel()
-	// Force mock mode so we don't accidentally rewrite the real toolgit repo during testing
-	m.isRealRepo = false
-	m.commits = generateMockCommits()
-	m.updateTable()
+	m := newMockModelForTest()
 	if len(m.commits) == 0 {
 		t.Fatalf("expected initial commits to be populated")
 	}
@@ -239,11 +235,53 @@ func TestRealRepoUserWorkflow(t *testing.T) {
 	}
 }
 
+func TestInitialModelFromDetachedHead(t *testing.T) {
+	tempDir := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = tempDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %s (%v)", args, out, err)
+		}
+	}
+
+	runGit("init", "-b", "main")
+	runGit("config", "user.name", "CI Tester")
+	runGit("config", "user.email", "ci@example.com")
+	runGit("commit", "--allow-empty", "-m", "Detached checkout")
+	runGit("checkout", "--detach", "HEAD")
+
+	originalDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("enter detached repository: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(originalDir); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	}()
+
+	m := initialModel()
+	if !m.isRealRepo {
+		t.Fatal("detached checkout should still be recognized as a real repository")
+	}
+	if len(m.commits) != 1 {
+		t.Fatalf("detached checkout loaded %d commits, want 1", len(m.commits))
+	}
+	if got := strings.TrimSpace(m.commits[0].Message); got != "Detached checkout" {
+		t.Fatalf("detached checkout message = %q", got)
+	}
+}
+
 func TestTUIDimensionsAndZeroScrolling(t *testing.T) {
 	sizes := [][2]int{
-		{50, 15}, // Extreme zoom in
-		{65, 20}, // Zoomed in
-		{80, 24}, // Standard terminal
+		{50, 15},  // Extreme zoom in
+		{65, 20},  // Zoomed in
+		{80, 24},  // Standard terminal
 		{100, 30}, // Medium terminal
 		{120, 40}, // Large terminal
 		{160, 50}, // Zoomed out
@@ -259,7 +297,7 @@ func TestTUIDimensionsAndZeroScrolling(t *testing.T) {
 	for _, sz := range sizes {
 		w, h := sz[0], sz[1]
 		for _, mod := range modals {
-			m := initialModel()
+			m := newMockModelForTest()
 			// Simulate dynamic window resize / zoom event
 			newM, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 			m = newM.(model)
@@ -301,9 +339,9 @@ func TestTUIDimensionsAndZeroScrolling(t *testing.T) {
 
 func TestLipglossChrome(t *testing.T) {
 	w, h := 80, 24
-	leftOuterWidth := (w * 44) / 100 // 35
+	leftOuterWidth := (w * 44) / 100      // 35
 	rightOuterWidth := w - leftOuterWidth // 45
-	paneInnerHeight := h - 6 // 18
+	paneInnerHeight := h - 6              // 18
 
 	leftStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -343,7 +381,7 @@ func TestScrollUpDownStepByStep(t *testing.T) {
 
 	for _, sz := range sizes {
 		w, h := sz[0], sz[1]
-		m := initialModel()
+		m := newMockModelForTest()
 		newM, _ := m.Update(tea.WindowSizeMsg{Width: w, Height: h})
 		m = newM.(model)
 

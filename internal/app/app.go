@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -16,6 +17,7 @@ import (
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/term"
 
 	"toolgit/internal/core"
@@ -42,6 +44,16 @@ func DistributeTimes(commits []*core.CommitState, start time.Time, end time.Time
 	DistributeTimesOrganic(commits, start, end, 0)
 }
 
+func calendarDaySpan(start, end time.Time) int {
+	startDay := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
+	endDay := time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, end.Location())
+	days := 1
+	for day := startDay; day.Before(endDay); day = day.AddDate(0, 0, 1) {
+		days++
+	}
+	return days
+}
+
 // DistributeTimesOrganic distributes commits with organic human jitter, natural seconds, and active days partitioning.
 func DistributeTimesOrganic(commits []*core.CommitState, start time.Time, end time.Time, minDays int) {
 	n := len(commits)
@@ -65,11 +77,7 @@ func DistributeTimesOrganic(commits []*core.CommitState, start time.Time, end ti
 
 	// Calculate calendar span
 	sDay := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
-	eDay := time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, end.Location())
-	calendarDays := int(eDay.Sub(sDay).Hours()/24) + 1
-	if calendarDays < 1 {
-		calendarDays = 1
-	}
+	calendarDays := calendarDaySpan(start, end)
 
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 
@@ -148,8 +156,18 @@ func DistributeTimesOrganic(commits []*core.CommitState, start time.Time, end ti
 		if dayOffset == calendarDays-1 && end.Before(dayEnd) {
 			dayEnd = end
 		}
-		if !dayEnd.After(dayStart) {
-			dayEnd = dayStart.Add(30 * time.Minute)
+		if dayEnd.Before(dayStart) {
+			// The requested range does not intersect normal working hours on
+			// this day (for example, a 23:00→01:00 overnight range). Fall
+			// back to the part of the requested range that lies on this day.
+			dayStart = curDate
+			if start.After(dayStart) {
+				dayStart = start
+			}
+			dayEnd = curDate.AddDate(0, 0, 1).Add(-time.Nanosecond)
+			if end.Before(dayEnd) {
+				dayEnd = end
+			}
 		}
 
 		daySlice := chronoCommits[commitIdx : commitIdx+numForDay]
@@ -230,16 +248,22 @@ func generateMockCommits() []*core.CommitState {
 	for _, m := range mockData {
 		t := now.Add(m.offset)
 		list = append(list, &core.CommitState{
-			Hash:         m.hash,
-			OriginalHash: m.hash,
-			Message:      m.msg,
-			AuthorName:   m.name,
-			OriginalName: m.name,
-			AuthorEmail:  m.email,
-			OriginalMail: m.email,
-			Timestamp:    t,
-			OriginalTime: t,
-			Selected:     false,
+			Hash:                  m.hash,
+			OriginalHash:          m.hash,
+			Message:               m.msg,
+			AuthorName:            m.name,
+			OriginalName:          m.name,
+			AuthorEmail:           m.email,
+			OriginalMail:          m.email,
+			Timestamp:             t,
+			OriginalTime:          t,
+			CommitterName:         m.name,
+			OriginalCommitterName: m.name,
+			CommitterEmail:        m.email,
+			OriginalCommitterMail: m.email,
+			CommitterTime:         t,
+			OriginalCommitterTime: t,
+			Selected:              false,
 		})
 	}
 	return list
@@ -298,7 +322,7 @@ var (
 	detailKeyStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("#A1A1AA")).
-			Width(11)
+			Width(14)
 
 	detailValStyle = lipgloss.NewStyle().
 			Foreground(textColor)
@@ -379,19 +403,36 @@ func initialModel() model {
 	var commits []*core.CommitState
 	isReal := false
 	branch := ""
+	var loadErr error
 
 	if git.IsInsideGitRepo() {
+		isReal = true
+		branch, _ = git.GetCurrentBranch()
 		realCommits, err := git.LoadGitCommits()
-		if err == nil && len(realCommits) > 0 {
+		if err == nil {
 			commits = realCommits
-			isReal = true
-			branch, _ = git.GetCurrentBranch()
+		} else {
+			loadErr = err
 		}
 	}
 
-	if len(commits) == 0 {
+	if !isReal {
 		commits = generateMockCommits()
 	}
+
+	statusMsg := "Ready."
+	if !isReal {
+		statusMsg = "Mock Mode (No Git repo found). Changes will be simulated."
+	} else if errors.Is(loadErr, git.ErrNoUnpushedCommits) {
+		statusMsg = "No unpushed commits found on the current branch."
+	} else if loadErr != nil {
+		statusMsg = "Unable to load Git commits: " + loadErr.Error()
+	}
+
+	return newModel(commits, isReal, branch, statusMsg)
+}
+
+func newModel(commits []*core.CommitState, isReal bool, branch, statusMsg string) model {
 
 	// Initialize Help
 	h := help.New()
@@ -430,11 +471,6 @@ func initialModel() model {
 		Background(lipgloss.Color("57")).
 		Bold(false)
 	t.SetStyles(s)
-
-	statusMsg := "Ready."
-	if !isReal {
-		statusMsg = "Mock Mode (No Git repo found). Changes will be simulated."
-	}
 
 	termW, termH, err := term.GetSize(os.Stdout.Fd())
 	if err != nil || termW <= 0 || termH <= 0 {
@@ -530,17 +566,29 @@ func (m *model) updateTable() {
 		}
 		status := fmt.Sprintf("%s%s %s", modMarker, mergeMarker, check)
 
-		msg := c.Message
-		if len(msg) > maxMsgLen {
-			if maxMsgLen > 3 {
-				msg = msg[:maxMsgLen-3] + "..."
-			} else {
-				msg = msg[:maxMsgLen]
-			}
-		}
+		msg := strings.SplitN(c.Message, "\n", 2)[0]
+		msg = truncateForDisplay(msg, maxMsgLen)
 		rows = append(rows, table.Row{status, shortHash, msg})
 	}
 	m.table.SetRows(rows)
+}
+
+func (m *model) reloadCommits() error {
+	commits, err := git.LoadGitCommits()
+	if err != nil && !errors.Is(err, git.ErrNoUnpushedCommits) {
+		return err
+	}
+	m.commits = commits
+	m.table.SetCursor(0)
+	m.updateTable()
+	return nil
+}
+
+func truncateForDisplay(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	return ansi.Truncate(value, width, "...")
 }
 
 func (m model) Init() tea.Cmd {
@@ -616,10 +664,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.status = "Successfully rolled back to " + msg.Branch
 				m.statusOk = true
-				// reload commits
-				if newCommits, err := git.LoadGitCommits(); err == nil {
-					m.commits = newCommits
-					m.updateTable()
+				if err := m.reloadCommits(); err != nil {
+					m.status = "Rollback succeeded, but commits could not be reloaded: " + err.Error()
+					m.statusOk = false
 				}
 			}
 			m.activeModal = ModalNone
@@ -637,10 +684,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.currentBranch = msg.Branch
 				m.status = fmt.Sprintf("Switched to branch '%s'", msg.Branch)
 				m.statusOk = true
-				// Reload commits from the new branch
-				if newCommits, err := git.LoadGitCommits(); err == nil {
-					m.commits = newCommits
-					m.updateTable()
+				if err := m.reloadCommits(); err != nil {
+					m.status = "Branch switched, but commits could not be reloaded: " + err.Error()
+					m.statusOk = false
 				}
 				m.activeModal = ModalNone
 			}
@@ -714,6 +760,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.timeModal = NewTimePickerModal(len(targets))
 			m.activeModal = ModalTimeShift
 		case key.Matches(msg, m.keys.Apply):
+			if len(m.commits) == 0 {
+				m.status = "No commits are available to rewrite."
+				m.statusOk = false
+				return m, nil
+			}
 			// Open Dry-Run / Rewrite Modal
 			diffs := git.GenerateDryRunDiff(m.commits)
 			s := spinner.New()
@@ -891,18 +942,13 @@ func (m model) handleModalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case ModalRollback:
-		if m.rollbackModal.State == RollbackStateExecuting {
+		switch m.rollbackModal.State {
+		case RollbackStateExecuting:
 			return m, nil
-		}
-
-		switch msg.String() {
-		case "esc", "q":
-			m.activeModal = ModalNone
-			return m, nil
-		case "enter":
-			selected := m.rollbackModal.List.SelectedItem()
-			if selected != nil {
-				branch := selected.FilterValue()
+		case RollbackStateConfirm:
+			switch msg.String() {
+			case "enter", "y", "Y":
+				branch := m.rollbackModal.PendingBranch
 				m.rollbackModal.State = RollbackStateExecuting
 				return m, tea.Batch(
 					m.rollbackModal.Spinner.Tick,
@@ -911,13 +957,28 @@ func (m model) handleModalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 						return RollbackFinishedMsg{Branch: branch, Err: err}
 					},
 				)
+			case "esc", "n", "N":
+				m.rollbackModal.State = RollbackStateSelect
+				m.rollbackModal.PendingBranch = ""
+				return m, nil
 			}
-			m.activeModal = ModalNone
-			return m, nil
 		default:
-			var cmd tea.Cmd
-			m.rollbackModal.List, cmd = m.rollbackModal.List.Update(msg)
-			return m, cmd
+			switch msg.String() {
+			case "esc", "q":
+				m.activeModal = ModalNone
+				return m, nil
+			case "enter":
+				selected := m.rollbackModal.List.SelectedItem()
+				if selected != nil {
+					m.rollbackModal.PendingBranch = selected.FilterValue()
+					m.rollbackModal.State = RollbackStateConfirm
+				}
+				return m, nil
+			default:
+				var cmd tea.Cmd
+				m.rollbackModal.List, cmd = m.rollbackModal.List.Update(msg)
+				return m, cmd
+			}
 		}
 
 	case ModalDryRun:
@@ -968,10 +1029,9 @@ func (m model) handleModalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.activeModal = ModalNone
 
 				if m.isRealRepo {
-					newCommits, err := git.LoadGitCommits()
-					if err == nil {
-						m.commits = newCommits
-						m.updateTable()
+					if err := m.reloadCommits(); err != nil {
+						m.status = "Rewrite completed, but commits could not be reloaded: " + err.Error()
+						m.statusOk = false
 					}
 				}
 				return m, nil
@@ -1204,7 +1264,7 @@ func (m model) View() string {
 			headerBlock = lipgloss.JoinVertical(lipgloss.Left, detailTitle, badges)
 		}
 
-		maxValW := rightPrintableWidth - 11
+		maxValW := rightPrintableWidth - 14
 		if maxValW < 10 {
 			maxValW = 10
 		}
@@ -1221,8 +1281,10 @@ func (m model) View() string {
 			"",
 			renderDetailRow("SHA:", hashStyle.Render(shaDisplay), maxValW),
 			renderDetailRow("Author:", detailValStyle.Render(cur.AuthorName), maxValW),
-			renderDetailRow("Email:", detailValStyle.Render(cur.AuthorEmail), maxValW),
-			renderDetailRow("Date:", detailValStyle.Render(cur.Timestamp.Format("Mon Jan 02, 2006 • 15:04")), maxValW),
+			renderDetailRow("Author Email:", detailValStyle.Render(cur.AuthorEmail), maxValW),
+			renderDetailRow("Author Date:", detailValStyle.Render(cur.Timestamp.Format("Mon Jan 02, 2006 • 15:04")), maxValW),
+			renderDetailRow("Committer:", detailValStyle.Render(cur.CommitterName), maxValW),
+			renderDetailRow("Commit Date:", detailValStyle.Render(cur.CommitterTime.Format("Mon Jan 02, 2006 • 15:04")), maxValW),
 			renderDetailRow("Relative:", detailValStyle.Render(formatRelativeTime(cur.Timestamp)), maxValW),
 		}
 

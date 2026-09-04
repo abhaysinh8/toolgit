@@ -6,8 +6,11 @@ Write-Host "  👀  ToolGit File Watcher Active (Listening for saves)   " -Foreg
 Write-Host "  Press Ctrl+C to stop watching.                          " -ForegroundColor Gray
 Write-Host "══════════════════════════════════════════════════════════" -ForegroundColor Cyan
 
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+$updateScript = Join-Path $repoRoot "scripts\build\update.ps1"
+
 $watcher = New-Object System.IO.FileSystemWatcher
-$watcher.Path = (Get-Location).Path
+$watcher.Path = $repoRoot
 $watcher.Filter = "*.go"
 $watcher.IncludeSubdirectories = $true
 $watcher.EnableRaisingEvents = $true
@@ -22,7 +25,12 @@ while ($true) {
         if (($now - $lastRun).TotalSeconds -gt 1.5) {
             $lastRun = $now
             Write-Host "`n[Change detected in $($result.Name)] 🔄 Rebuilding and updating..." -ForegroundColor Magenta
-            .\update.ps1 -SkipTests
+            Push-Location $repoRoot
+            try {
+                & $updateScript -SkipTests
+            } finally {
+                Pop-Location
+            }
         }
     }
 }

@@ -65,7 +65,7 @@ sequenceDiagram
 ```
 
 ### Why ASCII Control Delimiters?
-- **Unit Separator (`%x1f` / `0x1F`)**: Separates commit fields (Hash, Parent Hashes `%P`, Author, Email, ISO Timestamp, Raw Body `%B`).
+- **Unit Separator (`%x1f` / `0x1F`)**: Separates commit fields (hash, parents, author metadata, committer metadata, signature status, and raw body).
 - **Record Separator (`%x1e` / `0x1E`)**: Separates individual commits.
 - **Benefit**: Eliminates parsing bugs caused by newlines, tabs, emojis, or multiline commit messages. `%P` enables multi-parent merge awareness without extra `rev-list` queries.
 
@@ -176,25 +176,28 @@ This invariant guarantees that navigation (<kbd>j</kbd>/<kbd>k</kbd>/<kbd>↑</k
 
 ## 5. Non-Destructive Git Plumbing Engine
 
-`toolgit` executes metadata rewrites directly through Git's low-level object database, optimized into an **$O(1)$ Process Execution Pipeline**:
+`toolgit` executes metadata rewrites directly through Git's low-level object database without passing repository data through a command shell:
 
 ```mermaid
 graph TD
-    A["1. Create Safety Backup<br/><code>git branch toolgit-backup-&lt;timestamp&gt;</code>"] --> B["2. Resolve Multi-Parent Topology<br/>(rewriteSet map[string]bool)"]
-    B --> C["3. Build Dynamic Script<br/>(Strings Builder in Go)"]
-    C --> D["4. Single Script Execution<br/><code>git commit-tree -p ... -p ...</code>"]
-    D --> E["5. Atomically Move Ref<br/><code>git update-ref refs/heads/&lt;branch&gt;</code>"]
+    A["1. Create Safety Backup<br/><code>git branch toolgit-backup-&lt;timestamp&gt;</code>"] --> B["2. Resolve Multi-Parent Topology<br/>(old SHA to new SHA map)"]
+    B --> C["3. Read Original Tree<br/><code>git rev-parse &lt;sha&gt;^{tree}</code>"]
+    C --> D["4. Create Commit Directly<br/><code>git commit-tree -F -</code>"]
+    D --> E["5. Atomically Move Ref<br/><code>git update-ref HEAD &lt;new-sha&gt;</code>"]
 ```
 
-### Batch Execution Architecture & Topology Preservation
-Instead of spawning **2 `git` processes per commit** via individual process calls (which introduces high process spawn overhead on Windows), `toolgit` dynamically builds a single script payload and executes it completely within a single process runspace.
+### Direct Execution Architecture & Topology Preservation
 
-- **Multi-Parent Topology Preservation:** Rather than a simple linear `$PARENT` accumulator, `toolgit` assigns each commit a unique variable `$NEW_<hash12>`. For each parent:
-  - If the parent is within the current rewrite window, it resolves to `$NEW_<parent_hash12>`.
+Each Git operation is invoked directly with an argument array. Author metadata is supplied through the child process environment, and commit messages are supplied through standard input. Commit content therefore cannot be interpreted as PowerShell, shell syntax, or command-line arguments.
+
+- **Multi-Parent Topology Preservation:** `toolgit` maintains an in-memory old-SHA-to-new-SHA map. For each parent:
+  - If the parent is within the current rewrite window, it resolves to the rewritten SHA in that map.
   - If the parent is outside the window (e.g., historical base commit), it resolves to the original parent SHA literal (`-p '<sha>'`).
   - Root commits omit `-p`; octopus merges include 3+ `-p` flags.
-- **Multi-Line Messages:** Uses Here-Strings to accurately reconstruct commit bodies without variable escaping issues.
-- **Immediate Failure Traps:** Checks exit codes natively to short-circuit upon any `commit-tree` errors.
+- **Multi-Line Messages:** Sends the complete commit body to `git commit-tree -F -` through standard input.
+- **Committer Preservation:** Loads committer identity and timestamp separately and carries them into rewritten commits unchanged.
+- **Signed Commit Guard:** Refuses to rewrite signed commits because changing commit metadata necessarily invalidates the embedded signature.
+- **Immediate Failure Handling:** Stops before updating `HEAD` if any tree lookup or `commit-tree` operation fails.
 
 > [!NOTE]
 > **Zero Working Tree Risk:** `git commit-tree` creates new commit objects without performing a checkout. Uncommitted files or working tree changes on disk are never touched.

@@ -55,7 +55,7 @@ func TestBranchSwitchModalStateTransitions(t *testing.T) {
 }
 
 func TestAppBranchSwitchingFlow(t *testing.T) {
-	m := initialModel()
+	m := newMockModelForTest()
 	m.isRealRepo = false // Mock mode
 
 	// Press 'b' in mock mode
@@ -158,7 +158,7 @@ func TestMergeIndicatorInCommitState(t *testing.T) {
 		IsMerge:      true,
 	}
 
-	m := initialModel()
+	m := newMockModelForTest()
 	m.commits = []*core.CommitState{mergeCommit, linearCommit}
 	m.updateTable()
 

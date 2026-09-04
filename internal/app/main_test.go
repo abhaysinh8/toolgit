@@ -3,10 +3,13 @@ package app
 import (
 	"testing"
 	"time"
+	"unicode/utf8"
+
 	"toolgit/internal/core"
 	"toolgit/internal/git"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestDistributeTimesOrganicMonotonicityAndBounds(t *testing.T) {
@@ -77,6 +80,54 @@ func TestDistributeTimesSingleItem(t *testing.T) {
 
 	if commits[0].Timestamp.Before(start) || commits[0].Timestamp.After(end) {
 		t.Errorf("expected timestamp within [%v, %v], got %v", start, end, commits[0].Timestamp)
+	}
+}
+
+func TestDistributeTimesOvernightRangeStaysWithinBounds(t *testing.T) {
+	commits := make([]*core.CommitState, 6)
+	for i := range commits {
+		commits[i] = &core.CommitState{}
+	}
+	start := time.Date(2026, time.January, 10, 23, 0, 0, 0, time.UTC)
+	end := time.Date(2026, time.January, 11, 1, 0, 0, 0, time.UTC)
+
+	DistributeTimesOrganic(commits, start, end, 2)
+	for i, commit := range commits {
+		if commit.Timestamp.Before(start) || commit.Timestamp.After(end) {
+			t.Fatalf("commit %d timestamp %v is outside [%v, %v]", i, commit.Timestamp, start, end)
+		}
+	}
+}
+
+func TestCalendarDaySpanAcrossDST(t *testing.T) {
+	location, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skipf("timezone data unavailable: %v", err)
+	}
+	start := time.Date(2026, time.March, 7, 12, 0, 0, 0, location)
+	end := time.Date(2026, time.March, 9, 12, 0, 0, 0, location)
+	if got := calendarDaySpan(start, end); got != 3 {
+		t.Fatalf("calendarDaySpan across DST = %d, want 3", got)
+	}
+}
+
+func TestCommitTableTruncatesUnicodeByDisplayWidth(t *testing.T) {
+	m := newMockModelForTest()
+	m.commits = []*core.CommitState{{
+		Hash:    "1234567890abcdef",
+		Message: "🚀修正 café and more text",
+	}}
+	columns := m.table.Columns()
+	columns[2].Width = 12
+	m.table.SetColumns(columns)
+	m.updateTable()
+
+	got := m.table.Rows()[0][2]
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncated message is invalid UTF-8: %q", got)
+	}
+	if width := ansi.StringWidth(got); width > 12 {
+		t.Fatalf("truncated message width = %d, want <= 12: %q", width, got)
 	}
 }
 
@@ -154,7 +205,7 @@ func TestTimePickerParsing(t *testing.T) {
 }
 
 func TestTimePickerDigitTyping(t *testing.T) {
-	m := initialModel()
+	m := newMockModelForTest()
 	// Open time picker modal
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	m = updated.(model)

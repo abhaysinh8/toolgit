@@ -1,14 +1,17 @@
 package git
 
 import (
-	"bytes"
+	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
 
 	"toolgit/internal/core"
 )
+
+var ErrNoUnpushedCommits = errors.New("no unpushed commits found")
 
 // IsInsideGitRepo checks if the current working directory is inside a Git repository.
 func IsInsideGitRepo() bool {
@@ -27,22 +30,30 @@ func GetCurrentBranch() (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// LoadGitCommits attempts to load commits from the repository.
-// It prioritizes unpushed commits (@{u}..HEAD); if no upstream is configured,
-// it loads all commits on the current branch.
+// LoadGitCommits loads unpushed commits when the current branch has an
+// upstream. It loads the full current-branch history only when no upstream is
+// configured.
 func LoadGitCommits() ([]*core.CommitState, error) {
 	if !IsInsideGitRepo() {
 		return nil, fmt.Errorf("not a git repository")
 	}
 
-	// Try unpushed commits first
-	commits, err := fetchGitLog("@{u}..HEAD")
-	if err == nil && len(commits) > 0 {
+	hasUpstream, err := currentBranchHasUpstream()
+	if err != nil {
+		return nil, err
+	}
+	if hasUpstream {
+		commits, err := fetchGitLog("@{u}..HEAD")
+		if err != nil {
+			return nil, fmt.Errorf("load unpushed commits: %w", err)
+		}
+		if len(commits) == 0 {
+			return nil, ErrNoUnpushedCommits
+		}
 		return commits, nil
 	}
 
-	// Fallback to all local branch commits
-	commits, err = fetchGitLog("HEAD")
+	commits, err := fetchGitLog("HEAD")
 	if err != nil {
 		return nil, err
 	}
@@ -53,10 +64,31 @@ func LoadGitCommits() ([]*core.CommitState, error) {
 	return commits, nil
 }
 
+func currentBranchHasUpstream() (bool, error) {
+	branchCmd := exec.Command("git", "symbolic-ref", "--quiet", "--short", "HEAD")
+	if err := branchCmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return false, nil
+		}
+		return false, fmt.Errorf("detect current branch: %w", err)
+	}
+
+	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", "@{upstream}^{commit}")
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return false, nil
+		}
+		return false, fmt.Errorf("detect current branch upstream: %w", err)
+	}
+	return true, nil
+}
+
 // fetchGitLog executes git log and parses the custom delimited output.
 // Delimiters: \x1f (Unit Separator between fields), \x1e (Record Separator between commits).
 func fetchGitLog(args ...string) ([]*core.CommitState, error) {
-	format := "%H%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%B%x1e"
+	format := "%H%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%cn%x1f%ce%x1f%cI%x1f%G?%x1f%B%x1e"
 	cmdArgs := append([]string{"log", fmt.Sprintf("--format=%s", format)}, args...)
 	cmd := exec.Command("git", cmdArgs...)
 
@@ -74,13 +106,13 @@ func fetchGitLog(args ...string) ([]*core.CommitState, error) {
 	var commits []*core.CommitState
 
 	for _, rec := range records {
-		rec = strings.TrimSpace(rec)
-		if rec == "" {
+		rec = strings.TrimPrefix(rec, "\n")
+		if strings.TrimSpace(rec) == "" {
 			continue
 		}
 
-		fields := strings.Split(rec, "\x1f")
-		if len(fields) < 6 {
+		fields := strings.SplitN(rec, "\x1f", 10)
+		if len(fields) < 10 {
 			continue
 		}
 
@@ -89,12 +121,20 @@ func fetchGitLog(args ...string) ([]*core.CommitState, error) {
 		authorName := fields[2]
 		authorEmail := fields[3]
 		dateStr := fields[4]
-		message := fields[5]
+		committerName := fields[5]
+		committerEmail := fields[6]
+		committerDateStr := fields[7]
+		signatureStatus := fields[8]
+		message := fields[9]
 
 		t, parseErr := time.Parse(time.RFC3339, dateStr)
 		if parseErr != nil {
 			// Fallback parsing for alternative git date formats
 			t, _ = time.Parse("2006-01-02 15:04:05 -0700", dateStr)
+		}
+		committerTime, parseErr := time.Parse(time.RFC3339, committerDateStr)
+		if parseErr != nil {
+			committerTime, _ = time.Parse("2006-01-02 15:04:05 -0700", committerDateStr)
 		}
 
 		var parents []string
@@ -103,18 +143,25 @@ func fetchGitLog(args ...string) ([]*core.CommitState, error) {
 		}
 
 		commits = append(commits, &core.CommitState{
-			Hash:         hash,
-			OriginalHash: hash,
-			Message:      message,
-			AuthorName:   authorName,
-			AuthorEmail:  authorEmail,
-			Timestamp:    t,
-			OriginalTime: t,
-			OriginalName: authorName,
-			OriginalMail: authorEmail,
-			Selected:     false,
-			ParentHashes: parents,
-			IsMerge:      len(parents) > 1,
+			Hash:                  hash,
+			OriginalHash:          hash,
+			Message:               message,
+			AuthorName:            authorName,
+			AuthorEmail:           authorEmail,
+			Timestamp:             t,
+			OriginalTime:          t,
+			OriginalName:          authorName,
+			OriginalMail:          authorEmail,
+			Selected:              false,
+			CommitterName:         committerName,
+			OriginalCommitterName: committerName,
+			CommitterEmail:        committerEmail,
+			OriginalCommitterMail: committerEmail,
+			CommitterTime:         committerTime,
+			OriginalCommitterTime: committerTime,
+			IsSigned:              signatureStatus != "N",
+			ParentHashes:          parents,
+			IsMerge:               len(parents) > 1,
 		})
 	}
 
@@ -125,10 +172,20 @@ func fetchGitLog(args ...string) ([]*core.CommitState, error) {
 func CreateBackupBranch() (string, error) {
 	timestamp := time.Now().Format("20060102-150405")
 	branchName := fmt.Sprintf("toolgit-backup-%s", timestamp)
+	sourceBranch, err := GetCurrentBranch()
+	if err != nil {
+		return "", fmt.Errorf("failed to identify source branch: %w", err)
+	}
 
 	cmd := exec.Command("git", "branch", branchName, "HEAD")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("failed to create backup branch: %s (%w)", strings.TrimSpace(string(out)), err)
+	}
+
+	configKey := fmt.Sprintf("branch.%s.toolgitSourceBranch", branchName)
+	configCmd := exec.Command("git", "config", "--local", configKey, sourceBranch)
+	if out, err := configCmd.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("failed to associate backup with branch %s: %s (%w)", sourceBranch, strings.TrimSpace(string(out)), err)
 	}
 
 	return branchName, nil
@@ -165,6 +222,11 @@ func ExecuteHistoryRewrite(commits []*core.CommitState) (string, error) {
 	if len(commits) == 0 {
 		return "", fmt.Errorf("no commits to rewrite")
 	}
+	for _, commit := range commits {
+		if commit.IsSigned {
+			return "", fmt.Errorf("commit %s is signed; refusing rewrite because its signature cannot be preserved", commit.OriginalHash)
+		}
+	}
 
 	// 1. Create a safety backup branch
 	backupBranch, err := CreateBackupBranch()
@@ -194,93 +256,87 @@ func ExecuteHistoryRewrite(commits []*core.CommitState) (string, error) {
 	return backupBranch, nil
 }
 
-func escapePS(val string) string {
-	return strings.ReplaceAll(val, "'", "''")
-}
-
-// sanitizeVarName converts a git hash prefix into a valid PowerShell variable name.
-func sanitizeVarName(hash string) string {
-	if len(hash) > 12 {
-		hash = hash[:12]
-	}
-	return "NEW_" + hash
-}
-
-// BatchRewriteHistory generates and executes a PowerShell script that rewrites
-// commit history while preserving merge topology via old→new SHA mapping.
+// BatchRewriteHistory rewrites commit history while preserving merge topology
+// via an old→new SHA mapping. Git is invoked directly so commit metadata is
+// never interpreted by an intermediate command shell.
 func BatchRewriteHistory(commits []*core.CommitState, rewriteSet map[string]bool) error {
-	var script strings.Builder
-
-	// For each commit, we create a PowerShell variable $NEW_<hash12> holding the new SHA.
-	// Parent references are resolved: if the parent is in our rewrite set, use the
-	// corresponding $NEW_* variable; otherwise use the original SHA (unchanged parent).
+	rewritten := make(map[string]string, len(commits))
 
 	for _, c := range commits {
-		varName := sanitizeVarName(c.OriginalHash)
-		authorName := escapePS(c.AuthorName)
-		authorEmail := escapePS(c.AuthorEmail)
-		isoDate := c.Timestamp.Format(time.RFC3339)
+		treeCmd := exec.Command("git", "rev-parse", c.OriginalHash+"^{tree}")
+		treeOut, err := treeCmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("resolve tree for commit %s: %s (%w)", c.OriginalHash, strings.TrimSpace(string(treeOut)), err)
+		}
+		treeHash := strings.TrimSpace(string(treeOut))
 
-		script.WriteString(fmt.Sprintf("$env:GIT_AUTHOR_NAME='%s'\n", authorName))
-		script.WriteString(fmt.Sprintf("$env:GIT_AUTHOR_EMAIL='%s'\n", authorEmail))
-		script.WriteString(fmt.Sprintf("$env:GIT_AUTHOR_DATE='%s'\n", isoDate))
-		script.WriteString(fmt.Sprintf("$env:GIT_COMMITTER_NAME='%s'\n", authorName))
-		script.WriteString(fmt.Sprintf("$env:GIT_COMMITTER_EMAIL='%s'\n", authorEmail))
-		script.WriteString(fmt.Sprintf("$env:GIT_COMMITTER_DATE='%s'\n", isoDate))
-
-		// Escape backticks and dollar signs for double-quoted Here-String
-		msg := strings.ReplaceAll(c.Message, "`", "``")
-		msg = strings.ReplaceAll(msg, "$", "`$")
-
-		script.WriteString(fmt.Sprintf("$MSG = @\"\n%s\n\"@\n", msg))
-
-		// Extract Tree SHA
-		script.WriteString(fmt.Sprintf("$TREE = git rev-parse \"%s^{tree}\"\n", c.OriginalHash))
-
-		// Build parent flags: resolve each parent to its rewritten variable or original SHA
-		var parentArgs string
-		if len(c.ParentHashes) == 0 {
-			// Root commit: no parent flags
-			parentArgs = ""
-		} else {
-			var parts []string
-			for _, ph := range c.ParentHashes {
-				if rewriteSet[ph] {
-					// Parent is being rewritten, reference its PowerShell variable
-					parts = append(parts, fmt.Sprintf("-p $%s", sanitizeVarName(ph)))
-				} else {
-					// Parent is outside the rewrite window, use original SHA
-					parts = append(parts, fmt.Sprintf("-p '%s'", ph))
+		args := []string{"commit-tree", treeHash}
+		for _, parentHash := range c.ParentHashes {
+			resolvedParent := parentHash
+			if rewriteSet[parentHash] {
+				var ok bool
+				resolvedParent, ok = rewritten[parentHash]
+				if !ok {
+					return fmt.Errorf("rewrite order invalid: parent %s of commit %s has not been rewritten", parentHash, c.OriginalHash)
 				}
 			}
-			parentArgs = " " + strings.Join(parts, " ")
+			args = append(args, "-p", resolvedParent)
 		}
+		args = append(args, "-F", "-")
 
-		script.WriteString(fmt.Sprintf("$%s = git commit-tree $TREE%s -m $MSG\n", varName, parentArgs))
-		script.WriteString("if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\n\n")
+		isoDate := c.Timestamp.Format(time.RFC3339)
+		committerName := c.CommitterName
+		if committerName == "" {
+			committerName = c.AuthorName
+		}
+		committerEmail := c.CommitterEmail
+		if committerEmail == "" {
+			committerEmail = c.AuthorEmail
+		}
+		committerTime := c.CommitterTime
+		if committerTime.IsZero() {
+			committerTime = c.Timestamp
+		}
+		commitCmd := exec.Command("git", args...)
+		commitCmd.Stdin = strings.NewReader(c.Message)
+		commitCmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME="+c.AuthorName,
+			"GIT_AUTHOR_EMAIL="+c.AuthorEmail,
+			"GIT_AUTHOR_DATE="+isoDate,
+			"GIT_COMMITTER_NAME="+committerName,
+			"GIT_COMMITTER_EMAIL="+committerEmail,
+			"GIT_COMMITTER_DATE="+committerTime.Format(time.RFC3339),
+		)
+
+		commitOut, err := commitCmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("rewrite commit %s: %s (%w)", c.OriginalHash, strings.TrimSpace(string(commitOut)), err)
+		}
+		newHash := strings.TrimSpace(string(commitOut))
+		if newHash == "" {
+			return fmt.Errorf("rewrite commit %s: git commit-tree returned an empty hash", c.OriginalHash)
+		}
+		rewritten[c.OriginalHash] = newHash
 	}
 
-	// The last commit processed is the new HEAD
-	lastVar := sanitizeVarName(commits[len(commits)-1].OriginalHash)
-	script.WriteString(fmt.Sprintf("git update-ref HEAD $%s\n", lastVar))
-	script.WriteString("if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\n")
-
-	// Execute the script via Stdin
-	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", "-")
-	cmd.Stdin = strings.NewReader(script.String())
-
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("batch rewrite failed: %w\nStderr: %s", err, stderr.String())
+	newHead := rewritten[commits[len(commits)-1].OriginalHash]
+	updateCmd := exec.Command("git", "update-ref", "HEAD", newHead)
+	if out, err := updateCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("update HEAD after rewrite: %s (%w)", strings.TrimSpace(string(out)), err)
 	}
 
 	return nil
 }
 
-// GetBackupBranches returns a list of all backup branches created by toolgit.
+// GetBackupBranches returns backup branches created for the current branch.
+// Legacy unscoped backups are intentionally omitted because their source branch
+// cannot be determined safely.
 func GetBackupBranches() ([]string, error) {
+	currentBranch, err := GetCurrentBranch()
+	if err != nil {
+		return nil, err
+	}
+
 	cmd := exec.Command("git", "branch", "--list", "toolgit-backup-*")
 	out, err := cmd.Output()
 	if err != nil {
@@ -290,16 +346,54 @@ func GetBackupBranches() ([]string, error) {
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
 		line = strings.TrimPrefix(line, "* ")
-		if line != "" {
+		if line == "" {
+			continue
+		}
+
+		configKey := fmt.Sprintf("branch.%s.toolgitSourceBranch", line)
+		sourceOut, err := exec.Command("git", "config", "--local", "--get", configKey).Output()
+		if err == nil && strings.TrimSpace(string(sourceOut)) == currentBranch {
 			branches = append(branches, line)
 		}
 	}
 	return branches, nil
 }
 
-// ExecuteRollback hard resets the current branch to the specified backup branch.
+// ExecuteRollback restores the current branch to one of its own toolgit backups.
+// It refuses to run when the working tree or index is dirty.
 func ExecuteRollback(branch string) error {
-	cmd := exec.Command("git", "reset", "--hard", branch)
+	if !strings.HasPrefix(branch, "toolgit-backup-") {
+		return fmt.Errorf("refusing rollback to non-toolgit branch %q", branch)
+	}
+
+	currentBranch, err := GetCurrentBranch()
+	if err != nil {
+		return fmt.Errorf("identify current branch: %w", err)
+	}
+	configKey := fmt.Sprintf("branch.%s.toolgitSourceBranch", branch)
+	sourceOut, err := exec.Command("git", "config", "--local", "--get", configKey).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("backup %q has no trusted source-branch metadata", branch)
+	}
+	sourceBranch := strings.TrimSpace(string(sourceOut))
+	if sourceBranch != currentBranch {
+		return fmt.Errorf("backup %q belongs to branch %q, not current branch %q", branch, sourceBranch, currentBranch)
+	}
+
+	dirty, err := hasUncommittedChanges()
+	if err != nil {
+		return fmt.Errorf("check working tree before rollback: %w", err)
+	}
+	if dirty {
+		return fmt.Errorf("rollback refused: working tree or index has uncommitted changes")
+	}
+
+	verifyRef := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	if err := verifyRef.Run(); err != nil {
+		return fmt.Errorf("backup branch %q does not exist", branch)
+	}
+
+	cmd := exec.Command("git", "reset", "--keep", branch)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("reset failed: %s (%w)", strings.TrimSpace(string(out)), err)
@@ -343,10 +437,15 @@ func SwitchBranch(branchName string) error {
 
 // HasUncommittedChanges returns true if the working tree or index has changes.
 func HasUncommittedChanges() bool {
+	dirty, err := hasUncommittedChanges()
+	return err == nil && dirty
+}
+
+func hasUncommittedChanges() (bool, error) {
 	cmd := exec.Command("git", "status", "--porcelain")
 	out, err := cmd.Output()
 	if err != nil {
-		return false
+		return false, err
 	}
-	return strings.TrimSpace(string(out)) != ""
+	return strings.TrimSpace(string(out)) != "", nil
 }

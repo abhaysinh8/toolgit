@@ -1,12 +1,15 @@
 package git
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"toolgit/internal/core"
 )
 
 func setupTestRepo(t *testing.T) (string, func(args ...string) string, func()) {
@@ -95,6 +98,51 @@ func TestFetchGitLogParsesParents(t *testing.T) {
 	}
 }
 
+func TestLoadGitCommitsDoesNotFallBackWhenUpstreamIsCurrent(t *testing.T) {
+	_, runGit, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	runGit("commit", "--allow-empty", "-m", "Initial")
+	remoteDir := t.TempDir()
+	runGit("init", "--bare", remoteDir)
+	runGit("remote", "add", "origin", remoteDir)
+	runGit("push", "-u", "origin", "main")
+
+	commits, err := LoadGitCommits()
+	if !errors.Is(err, ErrNoUnpushedCommits) {
+		t.Fatalf("expected ErrNoUnpushedCommits, got commits=%d err=%v", len(commits), err)
+	}
+
+	runGit("commit", "--allow-empty", "-m", "Local work")
+	commits, err = LoadGitCommits()
+	if err != nil {
+		t.Fatalf("load unpushed commit: %v", err)
+	}
+	if len(commits) != 1 || strings.TrimSpace(commits[0].Message) != "Local work" {
+		t.Fatalf("expected only the unpushed commit, got %#v", commits)
+	}
+}
+
+func TestLoadGitCommitsFromDetachedHead(t *testing.T) {
+	_, runGit, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	runGit("commit", "--allow-empty", "-m", "Initial")
+	runGit("commit", "--allow-empty", "-m", "Detached tip")
+	runGit("checkout", "--detach", "HEAD")
+
+	commits, err := LoadGitCommits()
+	if err != nil {
+		t.Fatalf("load detached HEAD: %v", err)
+	}
+	if len(commits) != 2 {
+		t.Fatalf("detached HEAD commit count = %d, want 2", len(commits))
+	}
+	if strings.TrimSpace(commits[0].Message) != "Detached tip" {
+		t.Fatalf("detached HEAD tip = %q, want Detached tip", commits[0].Message)
+	}
+}
+
 func TestBatchRewritePreservesMergeTopology(t *testing.T) {
 	tempDir, runGit, cleanup := setupTestRepo(t)
 	defer cleanup()
@@ -161,6 +209,97 @@ func TestBatchRewritePreservesMergeTopology(t *testing.T) {
 	}
 	if len(reloaded[0].ParentHashes) != 2 {
 		t.Errorf("expected reloaded commit 0 to have 2 ParentHashes, got %d", len(reloaded[0].ParentHashes))
+	}
+}
+
+func TestRewriteTreatsCommitMessageAsData(t *testing.T) {
+	tempDir, runGit, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	markerPath := filepath.Join(tempDir, "injection-marker.txt")
+	payload := "subject\n\"@\nSet-Content -LiteralPath '" + markerPath + "' -Value 'injected'\n$MSG = @\"\nbody"
+	runGit("commit", "--allow-empty", "-m", payload)
+	originalHead := runGit("rev-parse", "HEAD")
+
+	commits, err := LoadGitCommits()
+	if err != nil {
+		t.Fatalf("failed to load commits: %v", err)
+	}
+	if _, err := ExecuteHistoryRewrite(commits); err != nil {
+		t.Fatalf("rewrite failed: %v", err)
+	}
+
+	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
+		t.Fatalf("commit message was executed as code; marker stat error: %v", err)
+	}
+
+	message := runGit("log", "-1", "--format=%B")
+	if !strings.Contains(message, "Set-Content -LiteralPath") {
+		t.Fatalf("rewritten commit did not preserve the adversarial message: %q", message)
+	}
+	if rewrittenHead := runGit("rev-parse", "HEAD"); rewrittenHead != originalHead {
+		t.Fatalf("no-op rewrite changed commit hash: got %s, want %s", rewrittenHead, originalHead)
+	}
+}
+
+func TestRewritePreservesDistinctCommitterMetadata(t *testing.T) {
+	tempDir, _, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	commitCmd := exec.Command("git", "commit", "--allow-empty", "-m", "Distinct identities")
+	commitCmd.Dir = tempDir
+	commitCmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=Author Person",
+		"GIT_AUTHOR_EMAIL=author@example.com",
+		"GIT_AUTHOR_DATE=2026-01-02T03:04:05Z",
+		"GIT_COMMITTER_NAME=Committer Person",
+		"GIT_COMMITTER_EMAIL=committer@example.com",
+		"GIT_COMMITTER_DATE=2026-02-03T04:05:06Z",
+	)
+	if out, err := commitCmd.CombinedOutput(); err != nil {
+		t.Fatalf("create commit with distinct committer: %s (%v)", out, err)
+	}
+
+	commits, err := LoadGitCommits()
+	if err != nil {
+		t.Fatalf("load commits: %v", err)
+	}
+	if len(commits) != 1 {
+		t.Fatalf("expected one commit, got %d", len(commits))
+	}
+	commit := commits[0]
+	if commit.CommitterName != "Committer Person" || commit.CommitterEmail != "committer@example.com" {
+		t.Fatalf("committer metadata not loaded: %#v", commit)
+	}
+	originalCommitterTime := commit.CommitterTime
+	commit.AuthorName = "Updated Author"
+
+	if _, err := ExecuteHistoryRewrite(commits); err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	reloaded, err := LoadGitCommits()
+	if err != nil {
+		t.Fatalf("reload commits: %v", err)
+	}
+	got := reloaded[0]
+	if got.AuthorName != "Updated Author" {
+		t.Fatalf("author name = %q, want Updated Author", got.AuthorName)
+	}
+	if got.CommitterName != "Committer Person" || got.CommitterEmail != "committer@example.com" {
+		t.Fatalf("committer metadata changed: %#v", got)
+	}
+	if !got.CommitterTime.Equal(originalCommitterTime) {
+		t.Fatalf("committer time = %v, want %v", got.CommitterTime, originalCommitterTime)
+	}
+}
+
+func TestRewriteRefusesSignedCommitBeforeCreatingBackup(t *testing.T) {
+	_, err := ExecuteHistoryRewrite([]*core.CommitState{{
+		OriginalHash: "signed-commit",
+		IsSigned:     true,
+	}})
+	if err == nil || !strings.Contains(err.Error(), "signature cannot be preserved") {
+		t.Fatalf("expected signed-commit refusal, got %v", err)
 	}
 }
 
@@ -243,5 +382,93 @@ func TestHasUncommittedChanges(t *testing.T) {
 	runGit("commit", "-m", "Update clean.txt")
 	if HasUncommittedChanges() {
 		t.Errorf("expected clean working tree after commit")
+	}
+}
+
+func TestRollbackRefusesDirtyWorkingTree(t *testing.T) {
+	tempDir, runGit, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	filePath := filepath.Join(tempDir, "tracked.txt")
+	if err := os.WriteFile(filePath, []byte("original"), 0o644); err != nil {
+		t.Fatalf("write tracked file: %v", err)
+	}
+	runGit("add", "tracked.txt")
+	runGit("commit", "-m", "Initial")
+
+	backup, err := CreateBackupBranch()
+	if err != nil {
+		t.Fatalf("create backup: %v", err)
+	}
+	originalHead := runGit("rev-parse", "HEAD")
+
+	if err := os.WriteFile(filePath, []byte("local work"), 0o644); err != nil {
+		t.Fatalf("modify tracked file: %v", err)
+	}
+	if err := ExecuteRollback(backup); err == nil || !strings.Contains(err.Error(), "uncommitted changes") {
+		t.Fatalf("expected dirty-worktree refusal, got %v", err)
+	}
+
+	if head := runGit("rev-parse", "HEAD"); head != originalHead {
+		t.Fatalf("rollback moved HEAD despite dirty worktree: got %s, want %s", head, originalHead)
+	}
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read tracked file: %v", err)
+	}
+	if string(content) != "local work" {
+		t.Fatalf("rollback changed local work: %q", content)
+	}
+}
+
+func TestBackupsAreScopedToSourceBranch(t *testing.T) {
+	_, runGit, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	runGit("commit", "--allow-empty", "-m", "Initial")
+	backup, err := CreateBackupBranch()
+	if err != nil {
+		t.Fatalf("create backup: %v", err)
+	}
+
+	backups, err := GetBackupBranches()
+	if err != nil {
+		t.Fatalf("list backups on source branch: %v", err)
+	}
+	if len(backups) != 1 || backups[0] != backup {
+		t.Fatalf("expected source branch backup %q, got %v", backup, backups)
+	}
+
+	runGit("checkout", "-b", "feature")
+	backups, err = GetBackupBranches()
+	if err != nil {
+		t.Fatalf("list backups on other branch: %v", err)
+	}
+	if len(backups) != 0 {
+		t.Fatalf("expected no main backups on feature, got %v", backups)
+	}
+
+	if err := ExecuteRollback(backup); err == nil || !strings.Contains(err.Error(), "belongs to branch") {
+		t.Fatalf("expected cross-branch rollback refusal, got %v", err)
+	}
+}
+
+func TestRollbackRestoresCleanSourceBranch(t *testing.T) {
+	_, runGit, cleanup := setupTestRepo(t)
+	defer cleanup()
+
+	runGit("commit", "--allow-empty", "-m", "Initial")
+	backup, err := CreateBackupBranch()
+	if err != nil {
+		t.Fatalf("create backup: %v", err)
+	}
+	wantHead := runGit("rev-parse", backup)
+	runGit("commit", "--allow-empty", "-m", "Later")
+
+	if err := ExecuteRollback(backup); err != nil {
+		t.Fatalf("rollback clean branch: %v", err)
+	}
+	if head := runGit("rev-parse", "HEAD"); head != wantHead {
+		t.Fatalf("rollback HEAD = %s, want %s", head, wantHead)
 	}
 }

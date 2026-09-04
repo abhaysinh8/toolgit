@@ -368,7 +368,7 @@ func (m TimePickerModal) ParseTimes() (time.Time, time.Time, int, error) {
 		}
 		sDay := time.Date(st.Year(), st.Month(), st.Day(), 0, 0, 0, 0, st.Location())
 		eDay := time.Date(et.Year(), et.Month(), et.Day(), 0, 0, 0, 0, et.Location())
-		calendarDays := int(eDay.Sub(sDay).Hours()/24) + 1
+		calendarDays := calendarDaySpan(sDay, eDay)
 		if d > calendarDays {
 			return time.Time{}, time.Time{}, 0, fmt.Errorf("Active Days (%d) cannot exceed total span (%d days)", d, calendarDays)
 		}
@@ -442,7 +442,7 @@ func (m TimePickerModal) View(maxWidth int) string {
 	if err == nil {
 		sDay := time.Date(st.Year(), st.Month(), st.Day(), 0, 0, 0, 0, st.Location())
 		eDay := time.Date(et.Year(), et.Month(), et.Day(), 0, 0, 0, 0, et.Location())
-		calendarDays := int(eDay.Sub(sDay).Hours()/24) + 1
+		calendarDays := calendarDaySpan(sDay, eDay)
 
 		var summary string
 		if calendarDays > 1 {
@@ -545,7 +545,7 @@ func (m DryRunModal) View(maxWidth, maxHeight int) string {
 		return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(highlightColor).Padding(1, 2).Width(86).Render(content)
 	case DryRunStateDone:
 		header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FAFAFA")).Background(lipgloss.Color("#7D56F4")).Padding(0, 1).Render("🎉 Git History Rewrite Complete!")
-		body := fmt.Sprintf("\n🌿 Target Branch:    %s\n🛡️ Safety Backup:    %s\n\n──────────────────────────────────────────────────────────────────────────\n ✓ %d commit(s) successfully rewritten via Git plumbing\n ✓ Commit hashes, timestamps, and author signatures updated\n ✓ Working tree is clean (zero disk checkout overhead)\n\n 💡 Rollback at any time with:\n    git reset --hard %s\n──────────────────────────────────────────────────────────────────────────\n", m.TargetBranch, m.BackupBranch, m.Rewritten, m.BackupBranch)
+		body := fmt.Sprintf("\n🌿 Target Branch:    %s\n🛡️ Safety Backup:    %s\n\n─────────────────────────────────────────────────────────────────────────\n ✓ %d commit(s) successfully rewritten via Git plumbing\n ✓ Commit hashes, author metadata, and author timestamps updated\n ✓ Original committer metadata preserved\n ✓ Working tree was not checked out during rewrite\n\n 💡 Press [r] to restore this branch from its backup.\n    Rollback requires a clean working tree and confirmation.\n────────────────────────────────────────────────────────────────────────\n", m.TargetBranch, m.BackupBranch, m.Rewritten)
 		actions := lipgloss.NewStyle().Bold(true).Render("\n              👉 Press [Enter] or [Esc] to Return to Dashboard              ")
 		content = lipgloss.JoinVertical(lipgloss.Left, header, body, actions)
 		return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(highlightColor).Padding(1, 2).Width(86).Render(content)
@@ -590,9 +590,7 @@ func (m DryRunModal) View(maxWidth, maxHeight int) string {
 		}
 
 		authorDisp := d.NewAuthor
-		if len(authorDisp) > 17 {
-			authorDisp = authorDisp[:14] + "..."
-		}
+		authorDisp = truncateForDisplay(authorDisp, 17)
 
 		oldDate := d.OldTime.Format("01/02 15:04:05")
 		newDate := d.NewTime.Format("01/02 15:04:05")
@@ -651,13 +649,15 @@ type RollbackState int
 
 const (
 	RollbackStateSelect RollbackState = iota
+	RollbackStateConfirm
 	RollbackStateExecuting
 )
 
 type RollbackModal struct {
-	List    list.Model
-	State   RollbackState
-	Spinner spinner.Model
+	List          list.Model
+	State         RollbackState
+	Spinner       spinner.Model
+	PendingBranch string
 }
 
 func NewRollbackModal(branches []string) RollbackModal {
@@ -698,11 +698,16 @@ func (m *RollbackModal) Update(msg tea.Msg) tea.Cmd {
 func (m RollbackModal) View(maxWidth int) string {
 	var content string
 
-	if m.State == RollbackStateExecuting {
+	switch m.State {
+	case RollbackStateExecuting:
 		header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FAFAFA")).Background(lipgloss.Color("#F38BA8")).Padding(0, 1).Render("🔄 Executing Rollback...")
 		body := fmt.Sprintf("\n\n  %s Restoring branch to backup state...\n  Please wait.\n\n", m.Spinner.View())
 		content = lipgloss.JoinVertical(lipgloss.Left, header, body)
-	} else {
+	case RollbackStateConfirm:
+		header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FAFAFA")).Background(lipgloss.Color("#DC2626")).Padding(0, 1).Render(" Confirm Rollback ")
+		body := fmt.Sprintf("\n  Move the current branch to:\n  %s\n\n  Rollback is refused if Git has uncommitted changes.\n\n  [Enter / y] Confirm   [Esc / n] Cancel\n", m.PendingBranch)
+		content = lipgloss.JoinVertical(lipgloss.Left, header, body)
+	default:
 		content = m.List.View()
 	}
 
