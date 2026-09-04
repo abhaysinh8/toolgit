@@ -11,8 +11,6 @@ import (
 	"toolgit/internal/core"
 )
 
-var ErrNoUnpushedCommits = errors.New("no unpushed commits found")
-
 // IsInsideGitRepo checks if the current working directory is inside a Git repository.
 func IsInsideGitRepo() bool {
 	cmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
@@ -30,9 +28,10 @@ func GetCurrentBranch() (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// LoadGitCommits loads unpushed commits when the current branch has an
-// upstream. It loads the full current-branch history only when no upstream is
-// configured.
+// LoadGitCommits prefers unpushed commits when the current branch has an
+// upstream. When there are no unpushed commits (or no upstream is configured),
+// it loads the full current-branch history so a synchronized branch never
+// renders as an empty repository.
 func LoadGitCommits() ([]*core.CommitState, error) {
 	if !IsInsideGitRepo() {
 		return nil, fmt.Errorf("not a git repository")
@@ -47,10 +46,9 @@ func LoadGitCommits() ([]*core.CommitState, error) {
 		if err != nil {
 			return nil, fmt.Errorf("load unpushed commits: %w", err)
 		}
-		if len(commits) == 0 {
-			return nil, ErrNoUnpushedCommits
+		if len(commits) > 0 {
+			return commits, nil
 		}
-		return commits, nil
 	}
 
 	commits, err := fetchGitLog("HEAD")

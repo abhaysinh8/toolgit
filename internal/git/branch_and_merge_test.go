@@ -1,7 +1,6 @@
 package git
 
 import (
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -98,7 +97,7 @@ func TestFetchGitLogParsesParents(t *testing.T) {
 	}
 }
 
-func TestLoadGitCommitsDoesNotFallBackWhenUpstreamIsCurrent(t *testing.T) {
+func TestLoadGitCommitsFallsBackToHistoryWhenUpstreamIsCurrent(t *testing.T) {
 	_, runGit, cleanup := setupTestRepo(t)
 	defer cleanup()
 
@@ -109,8 +108,11 @@ func TestLoadGitCommitsDoesNotFallBackWhenUpstreamIsCurrent(t *testing.T) {
 	runGit("push", "-u", "origin", "main")
 
 	commits, err := LoadGitCommits()
-	if !errors.Is(err, ErrNoUnpushedCommits) {
-		t.Fatalf("expected ErrNoUnpushedCommits, got commits=%d err=%v", len(commits), err)
+	if err != nil {
+		t.Fatalf("load synchronized branch history: %v", err)
+	}
+	if len(commits) != 1 || strings.TrimSpace(commits[0].Message) != "Initial" {
+		t.Fatalf("expected synchronized branch history, got %#v", commits)
 	}
 
 	runGit("commit", "--allow-empty", "-m", "Local work")

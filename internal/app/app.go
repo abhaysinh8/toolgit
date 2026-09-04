@@ -1,7 +1,6 @@
 package app
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -423,8 +422,6 @@ func initialModel() model {
 	statusMsg := "Ready."
 	if !isReal {
 		statusMsg = "Mock Mode (No Git repo found). Changes will be simulated."
-	} else if errors.Is(loadErr, git.ErrNoUnpushedCommits) {
-		statusMsg = "No unpushed commits found on the current branch."
 	} else if loadErr != nil {
 		statusMsg = "Unable to load Git commits: " + loadErr.Error()
 	}
@@ -575,7 +572,7 @@ func (m *model) updateTable() {
 
 func (m *model) reloadCommits() error {
 	commits, err := git.LoadGitCommits()
-	if err != nil && !errors.Is(err, git.ErrNoUnpushedCommits) {
+	if err != nil {
 		return err
 	}
 	m.commits = commits
