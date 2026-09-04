@@ -49,11 +49,15 @@ sequenceDiagram
     CLI->>Git: git rev-parse --is-inside-work-tree
     alt In Git Repository
         Git-->>CLI: true
+        CLI->>Git: git branch --list --format="%(refname:short)"
         CLI->>Git: git branch --show-current
-        Git-->>CLI: "main" (or branch name)
-        CLI->>Git: git log --format="%H%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e" @{u}..HEAD
-        Git-->>CLI: Unit-delimited commit stream
-        CLI->>CLI: Parse into []*CommitState
+        Git-->>CLI: "main" (or branch list & current)
+        opt Multiple Local Branches
+            CLI->>CLI: Launch interactive fuzzy branch selector (or honor --branch flag)
+        end
+        CLI->>Git: git log --format="%H%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%B%x1e" @{u}..HEAD
+        Git-->>CLI: Unit-delimited commit stream with parent hashes
+        CLI->>CLI: Parse into []*CommitState (with ParentHashes & IsMerge)
     else Not in Git Repository
         Git-->>CLI: false
         CLI->>CLI: Load 5 mock commits with Mock Mode indicator
@@ -61,9 +65,9 @@ sequenceDiagram
 ```
 
 ### Why ASCII Control Delimiters?
-- **Unit Separator (`%x1f` / `0x1F`)**: Separates commit fields (Hash, Author, Email, ISO Timestamp, Subject).
+- **Unit Separator (`%x1f` / `0x1F`)**: Separates commit fields (Hash, Parent Hashes `%P`, Author, Email, ISO Timestamp, Raw Body `%B`).
 - **Record Separator (`%x1e` / `0x1E`)**: Separates individual commits.
-- **Benefit**: Eliminates parsing bugs caused by newlines, tabs, emojis, or multiline commit messages.
+- **Benefit**: Eliminates parsing bugs caused by newlines, tabs, emojis, or multiline commit messages. `%P` enables multi-parent merge awareness without extra `rev-list` queries.
 
 ---
 
@@ -144,14 +148,15 @@ To guarantee that the terminal emulator buffer never scrolls vertically (which c
 
 ### B. Dynamic Table Resizing (`bubbles/table`)
 Unlike static tables, `toolgit` dynamically resizes the table viewport and columns inside `resizeUI()`:
-- **Status Column:** 3 chars (`* v`).
+- **Status Column:** 4 chars (`✎M ✓`, `✎ M`, `  M ✓`, `✎   ✓`, `    ✓`). Shows `✎` (modified in memory), `M` (merge commit with 2+ parents), and `✓` (selected).
 - **Hash Column:** 7 chars (`8fb0c5f`).
 - **Message Column:** Dynamically scaled:
-  $$W_{\text{msgCol}} = W_{\text{leftPrintable}} - 16$$
+  $$W_{\text{msgCol}} = W_{\text{leftPrintable}} - 17$$
 - **Header Separator Fit:** Table total width is strictly clamped to $W_{\text{leftPrintable}}$, preventing the table header separator line from wrapping onto a second row.
 
 ### C. Adaptive Right-Pane Cards
 - **Dynamic SHA Length:** Displays full 40-char SHA on wide screens ($\ge 56\text{ cols}$ available); cleanly truncates to short SHA on narrow or zoomed-in displays.
+- **Merge Badge and Parent Metadata:** If the active commit is a merge commit, the header renders a purple `⑂ MERGE` badge and lists all resolved parent short SHAs under a `Parents:` row.
 - **Bounded Message View:** The commit message box has explicit `MaxWidth` and `MaxHeight` bounds derived from available pane lines, ensuring it never overflows the bottom pane border.
 
 ### D. Frame Padding & Zero-Scroll Invariant
@@ -175,15 +180,19 @@ This invariant guarantees that navigation (<kbd>j</kbd>/<kbd>k</kbd>/<kbd>↑</k
 
 ```mermaid
 graph TD
-    A["1. Create Safety Backup<br/><code>git branch toolgit-backup-&lt;timestamp&gt;</code>"] --> B["2. Build Dynamic Script<br/>(Strings Builder in Go)"]
-    B --> C["3. Single Script Execution<br/><code>git commit-tree ...</code>"]
-    C --> D["4. Environment Overrides<br/><code>GIT_AUTHOR_NAME=...</code>"]
+    A["1. Create Safety Backup<br/><code>git branch toolgit-backup-&lt;timestamp&gt;</code>"] --> B["2. Resolve Multi-Parent Topology<br/>(rewriteSet map[string]bool)"]
+    B --> C["3. Build Dynamic Script<br/>(Strings Builder in Go)"]
+    C --> D["4. Single Script Execution<br/><code>git commit-tree -p ... -p ...</code>"]
     D --> E["5. Atomically Move Ref<br/><code>git update-ref refs/heads/&lt;branch&gt;</code>"]
 ```
 
-### Batch Execution Architecture
-Instead of spawning **2 `git` processes per commit** via individual process calls (which introduces overhead on Windows), `toolgit` dynamically builds a single script payload and executes it completely within a single process runspace.
+### Batch Execution Architecture & Topology Preservation
+Instead of spawning **2 `git` processes per commit** via individual process calls (which introduces high process spawn overhead on Windows), `toolgit` dynamically builds a single script payload and executes it completely within a single process runspace.
 
+- **Multi-Parent Topology Preservation:** Rather than a simple linear `$PARENT` accumulator, `toolgit` assigns each commit a unique variable `$NEW_<hash12>`. For each parent:
+  - If the parent is within the current rewrite window, it resolves to `$NEW_<parent_hash12>`.
+  - If the parent is outside the window (e.g., historical base commit), it resolves to the original parent SHA literal (`-p '<sha>'`).
+  - Root commits omit `-p`; octopus merges include 3+ `-p` flags.
 - **Multi-Line Messages:** Uses Here-Strings to accurately reconstruct commit bodies without variable escaping issues.
 - **Immediate Failure Traps:** Checks exit codes natively to short-circuit upon any `commit-tree` errors.
 
@@ -210,6 +219,10 @@ Modals render as centered floating cards using `lipgloss.Place`:
 4. **Safety Rollback (<kbd>r</kbd>)**:
    - Menu of timestamped automatic safety backup branches (`toolgit-backup-<timestamp>`).
    - Restores branch synchronously inside a background goroutine with visual loading feedback.
+5. **Branch Switcher & Launch Selector (<kbd>b</kbd>)**:
+   - **Pre-TUI Picker:** On launch, if multiple local branches exist, prompts user to select a branch (skippable via `--branch <name>` or `-b <name>`).
+   - **In-TUI Modal:** Interactive branch switcher with real-time fuzzy filtering.
+   - **Dirty-Edit Safeguard:** Detects unapplied in-memory edits before switching, presenting a confirmation dialog to prevent accidental data loss.
 
 ---
 

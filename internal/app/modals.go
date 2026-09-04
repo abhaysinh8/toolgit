@@ -26,6 +26,7 @@ const (
 	ModalTimeShift
 	ModalDryRun
 	ModalRollback
+	ModalBranchSwitch
 )
 
 // --- Author / Email Modal ---
@@ -703,6 +704,104 @@ func (m RollbackModal) View(maxWidth int) string {
 		content = lipgloss.JoinVertical(lipgloss.Left, header, body)
 	} else {
 		content = m.List.View()
+	}
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(highlightColor).
+		Padding(1, 2).
+		Width(66).
+		Render(content)
+}
+
+// --- Branch Switch Modal ---
+
+type BranchSwitchState int
+
+const (
+	BranchSwitchIdle BranchSwitchState = iota
+	BranchSwitchConfirm
+	BranchSwitchSwitching
+	BranchSwitchDone
+)
+
+type BranchSwitchModal struct {
+	List          list.Model
+	CurrentBranch string
+	State         BranchSwitchState
+	Spinner       spinner.Model
+	ErrorMsg      string
+	HasDirtyEdits bool
+	PendingBranch string
+}
+
+type switchBranchItem struct {
+	name      string
+	isCurrent bool
+}
+
+func (i switchBranchItem) Title() string {
+	if i.isCurrent {
+		return i.name + " (current)"
+	}
+	return i.name
+}
+func (i switchBranchItem) Description() string {
+	if i.isCurrent {
+		return "currently checked out"
+	}
+	return "local branch"
+}
+func (i switchBranchItem) FilterValue() string { return i.name }
+
+func NewBranchSwitchModal(branches []string, current string, hasDirtyEdits bool) BranchSwitchModal {
+	items := make([]list.Item, len(branches))
+	for i, b := range branches {
+		items[i] = switchBranchItem{name: b, isCurrent: b == current}
+	}
+
+	l := list.New(items, list.NewDefaultDelegate(), 60, 14)
+	l.Title = "Switch Branch"
+	l.SetShowStatusBar(false)
+	l.SetFilteringEnabled(true)
+	l.Styles.Title = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#FAFAFA")).
+		Background(lipgloss.Color("#6366F1")).
+		Padding(0, 1)
+
+	s := spinner.New()
+	s.Spinner = spinner.Dot
+	s.Style = lipgloss.NewStyle().Foreground(accentColor)
+
+	return BranchSwitchModal{
+		List:          l,
+		CurrentBranch: current,
+		State:         BranchSwitchIdle,
+		Spinner:       s,
+		HasDirtyEdits: hasDirtyEdits,
+	}
+}
+
+func (m BranchSwitchModal) View(maxWidth int, maxHeight int) string {
+	var content string
+
+	switch m.State {
+	case BranchSwitchConfirm:
+		header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FAFAFA")).Background(lipgloss.Color("#F59E0B")).Padding(0, 1).Render(" Unsaved Edits ")
+		body := fmt.Sprintf("\n  You have unsaved edits that will be discarded\n  if you switch to branch '%s'.\n\n  Press Enter to continue, Esc to cancel.\n", m.PendingBranch)
+		content = lipgloss.JoinVertical(lipgloss.Left, header, body)
+	case BranchSwitchSwitching:
+		header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FAFAFA")).Background(lipgloss.Color("#6366F1")).Padding(0, 1).Render(" Switching Branch ")
+		body := fmt.Sprintf("\n\n  %s Checking out branch...\n  Please wait.\n\n", m.Spinner.View())
+		content = lipgloss.JoinVertical(lipgloss.Left, header, body)
+	default:
+		if m.ErrorMsg != "" {
+			errStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#EF4444"))
+			content = m.List.View() + "\n" + errStyle.Render("Error: "+m.ErrorMsg)
+		} else {
+			content = m.List.View()
+		}
 	}
 
 	return lipgloss.NewStyle().

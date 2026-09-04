@@ -56,7 +56,7 @@ func LoadGitCommits() ([]*core.CommitState, error) {
 // fetchGitLog executes git log and parses the custom delimited output.
 // Delimiters: \x1f (Unit Separator between fields), \x1e (Record Separator between commits).
 func fetchGitLog(args ...string) ([]*core.CommitState, error) {
-	format := "%H%x1f%an%x1f%ae%x1f%aI%x1f%B%x1e"
+	format := "%H%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%B%x1e"
 	cmdArgs := append([]string{"log", fmt.Sprintf("--format=%s", format)}, args...)
 	cmd := exec.Command("git", cmdArgs...)
 
@@ -80,20 +80,26 @@ func fetchGitLog(args ...string) ([]*core.CommitState, error) {
 		}
 
 		fields := strings.Split(rec, "\x1f")
-		if len(fields) < 5 {
+		if len(fields) < 6 {
 			continue
 		}
 
 		hash := fields[0]
-		authorName := fields[1]
-		authorEmail := fields[2]
-		dateStr := fields[3]
-		message := fields[4]
+		parentStr := fields[1]
+		authorName := fields[2]
+		authorEmail := fields[3]
+		dateStr := fields[4]
+		message := fields[5]
 
 		t, parseErr := time.Parse(time.RFC3339, dateStr)
 		if parseErr != nil {
 			// Fallback parsing for alternative git date formats
 			t, _ = time.Parse("2006-01-02 15:04:05 -0700", dateStr)
+		}
+
+		var parents []string
+		if strings.TrimSpace(parentStr) != "" {
+			parents = strings.Fields(parentStr)
 		}
 
 		commits = append(commits, &core.CommitState{
@@ -107,6 +113,8 @@ func fetchGitLog(args ...string) ([]*core.CommitState, error) {
 			OriginalName: authorName,
 			OriginalMail: authorEmail,
 			Selected:     false,
+			ParentHashes: parents,
+			IsMerge:      len(parents) > 1,
 		})
 	}
 
@@ -151,7 +159,8 @@ func GenerateDryRunDiff(commits []*core.CommitState) []core.DiffItem {
 }
 
 // ExecuteHistoryRewrite safely rewrites commit history using Git plumbing commands.
-// Commits must be passed in order (HEAD down to oldest or oldest to HEAD).
+// Preserves merge topology by tracking old SHA → new SHA mappings.
+// Commits must be passed in order from newest (HEAD) to oldest (git log order).
 func ExecuteHistoryRewrite(commits []*core.CommitState) (string, error) {
 	if len(commits) == 0 {
 		return "", fmt.Errorf("no commits to rewrite")
@@ -170,27 +179,18 @@ func ExecuteHistoryRewrite(commits []*core.CommitState) (string, error) {
 		ordered[i] = commits[len(commits)-1-i]
 	}
 
-	// Find the parent of the oldest commit in our chain
-	oldestHash := ordered[0].OriginalHash
-	parentCmd := exec.Command("git", "rev-parse", oldestHash+"^@")
-	parentOut, _ := parentCmd.Output()
-
-	// Handle multiple parents (e.g. merge commits) by grabbing the first parent,
-	// or format it cleanly for the PowerShell script.
-	parents := strings.Fields(strings.TrimSpace(string(parentOut)))
-	var baseUpstreamSHA string
-	if len(parents) > 0 {
-		baseUpstreamSHA = parents[0] // Just take the primary parent for the rewritten base
+	// 3. Build the set of commit hashes being rewritten for parent resolution
+	rewriteSet := make(map[string]bool, len(ordered))
+	for _, c := range ordered {
+		rewriteSet[c.OriginalHash] = true
 	}
 
-	// Execute O(1) process rewrite via PowerShell
-	err = BatchRewriteHistory(ordered, baseUpstreamSHA)
+	// 4. Execute topology-preserving rewrite
+	err = BatchRewriteHistory(ordered, rewriteSet)
 	if err != nil {
 		return backupBranch, fmt.Errorf("failed to batch rewrite history: %w", err)
 	}
 
-	// We don't get the exact new hash of every commit back from the batch script,
-	// but we can refresh the commit list from disk after the rewrite completes.
 	return backupBranch, nil
 }
 
@@ -198,14 +198,25 @@ func escapePS(val string) string {
 	return strings.ReplaceAll(val, "'", "''")
 }
 
-func BatchRewriteHistory(commits []*core.CommitState, baseUpstreamSHA string) error {
+// sanitizeVarName converts a git hash prefix into a valid PowerShell variable name.
+func sanitizeVarName(hash string) string {
+	if len(hash) > 12 {
+		hash = hash[:12]
+	}
+	return "NEW_" + hash
+}
+
+// BatchRewriteHistory generates and executes a PowerShell script that rewrites
+// commit history while preserving merge topology via old→new SHA mapping.
+func BatchRewriteHistory(commits []*core.CommitState, rewriteSet map[string]bool) error {
 	var script strings.Builder
 
-	// 1. Initialize $PARENT
-	script.WriteString(fmt.Sprintf("$PARENT = '%s'\n", escapePS(baseUpstreamSHA)))
+	// For each commit, we create a PowerShell variable $NEW_<hash12> holding the new SHA.
+	// Parent references are resolved: if the parent is in our rewrite set, use the
+	// corresponding $NEW_* variable; otherwise use the original SHA (unchanged parent).
 
-	// 2. Loop through commits
 	for _, c := range commits {
+		varName := sanitizeVarName(c.OriginalHash)
 		authorName := escapePS(c.AuthorName)
 		authorEmail := escapePS(c.AuthorEmail)
 		isoDate := c.Timestamp.Format(time.RFC3339)
@@ -223,23 +234,38 @@ func BatchRewriteHistory(commits []*core.CommitState, baseUpstreamSHA string) er
 
 		script.WriteString(fmt.Sprintf("$MSG = @\"\n%s\n\"@\n", msg))
 
-		// Extract Tree SHA via PowerShell
+		// Extract Tree SHA
 		script.WriteString(fmt.Sprintf("$TREE = git rev-parse \"%s^{tree}\"\n", c.OriginalHash))
 
-		// Run commit-tree and capture into $PARENT
-		script.WriteString("if ([string]::IsNullOrWhiteSpace($PARENT)) {\n")
-		script.WriteString("    $PARENT = git commit-tree $TREE -m $MSG\n")
-		script.WriteString("} else {\n")
-		script.WriteString("    $PARENT = git commit-tree $TREE -p $PARENT -m $MSG\n")
-		script.WriteString("}\n")
+		// Build parent flags: resolve each parent to its rewritten variable or original SHA
+		var parentArgs string
+		if len(c.ParentHashes) == 0 {
+			// Root commit: no parent flags
+			parentArgs = ""
+		} else {
+			var parts []string
+			for _, ph := range c.ParentHashes {
+				if rewriteSet[ph] {
+					// Parent is being rewritten, reference its PowerShell variable
+					parts = append(parts, fmt.Sprintf("-p $%s", sanitizeVarName(ph)))
+				} else {
+					// Parent is outside the rewrite window, use original SHA
+					parts = append(parts, fmt.Sprintf("-p '%s'", ph))
+				}
+			}
+			parentArgs = " " + strings.Join(parts, " ")
+		}
+
+		script.WriteString(fmt.Sprintf("$%s = git commit-tree $TREE%s -m $MSG\n", varName, parentArgs))
 		script.WriteString("if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\n\n")
 	}
 
-	// 3. Atomically update the branch HEAD
-	script.WriteString("git update-ref HEAD $PARENT\n")
+	// The last commit processed is the new HEAD
+	lastVar := sanitizeVarName(commits[len(commits)-1].OriginalHash)
+	script.WriteString(fmt.Sprintf("git update-ref HEAD $%s\n", lastVar))
 	script.WriteString("if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\n")
 
-	// 4. Execute the script via Stdin
+	// Execute the script via Stdin
 	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", "-")
 	cmd.Stdin = strings.NewReader(script.String())
 
@@ -279,4 +305,48 @@ func ExecuteRollback(branch string) error {
 		return fmt.Errorf("reset failed: %s (%w)", strings.TrimSpace(string(out)), err)
 	}
 	return nil
+}
+
+// GetLocalBranches returns all local branch names and the currently active branch.
+func GetLocalBranches() ([]string, string, error) {
+	cmd := exec.Command("git", "branch", "--list", "--format=%(refname:short)")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, "", err
+	}
+
+	var branches []string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			branches = append(branches, line)
+		}
+	}
+
+	current, err := GetCurrentBranch()
+	if err != nil {
+		current = ""
+	}
+
+	return branches, current, nil
+}
+
+// SwitchBranch checks out the specified local branch.
+func SwitchBranch(branchName string) error {
+	cmd := exec.Command("git", "checkout", branchName)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("switch failed: %s (%w)", strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// HasUncommittedChanges returns true if the working tree or index has changes.
+func HasUncommittedChanges() bool {
+	cmd := exec.Command("git", "status", "--porcelain")
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) != ""
 }

@@ -13,6 +13,8 @@ type CommitState struct {
 	Timestamp    time.Time
 	OriginalTime time.Time
 	Selected     bool
+	ParentHashes []string // All parent SHAs (len > 1 indicates merge commit)
+	IsMerge      bool     // Convenience flag for merge commits
 }
 
 type DiffItem struct {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
@@ -27,6 +28,11 @@ type RewriteFinishedMsg struct {
 }
 
 type RollbackFinishedMsg struct {
+	Branch string
+	Err    error
+}
+
+type BranchSwitchFinishedMsg struct {
 	Branch string
 	Err    error
 }
@@ -320,17 +326,18 @@ type keyMap struct {
 	Time      key.Binding
 	Apply     key.Binding
 	Rollback  key.Binding
+	Branch    key.Binding
 	Quit      key.Binding
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Select, k.Edit, k.Time, k.Apply, k.Rollback, k.Quit}
+	return []key.Binding{k.Select, k.Edit, k.Time, k.Apply, k.Rollback, k.Branch, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Select, k.SelectAll},
-		{k.Edit, k.Time, k.Apply, k.Rollback, k.Quit},
+		{k.Edit, k.Time, k.Apply, k.Rollback, k.Branch, k.Quit},
 	}
 }
 
@@ -343,6 +350,7 @@ var keys = keyMap{
 	Time:      key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "distribute times")),
 	Apply:     key.NewBinding(key.WithKeys("w"), key.WithHelp("w", "apply/dry-run")),
 	Rollback:  key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "rollback")),
+	Branch:    key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "branch")),
 	Quit:      key.NewBinding(key.WithKeys("q", "esc", "ctrl+c"), key.WithHelp("q", "quit")),
 }
 
@@ -364,6 +372,7 @@ type model struct {
 	timeModal     TimePickerModal
 	dryRunModal   DryRunModal
 	rollbackModal RollbackModal
+	branchModal   BranchSwitchModal
 }
 
 func initialModel() model {
@@ -481,13 +490,13 @@ func (m *model) resizeUI() {
 	m.table.SetHeight(tableDataHeight)
 	m.table.SetWidth(leftPrintableWidth)
 
-	msgColWidth := leftPrintableWidth - 16
+	msgColWidth := leftPrintableWidth - 17
 	if msgColWidth < 6 {
 		msgColWidth = 6
 	}
 
 	m.table.SetColumns([]table.Column{
-		{Title: " ", Width: 3},
+		{Title: " ", Width: 4},
 		{Title: "Hash", Width: 7},
 		{Title: "Message", Width: msgColWidth},
 	})
@@ -515,7 +524,11 @@ func (m *model) updateTable() {
 		if c.AuthorName != c.OriginalName || c.AuthorEmail != c.OriginalMail || !c.Timestamp.Equal(c.OriginalTime) {
 			modMarker = "✎"
 		}
-		status := fmt.Sprintf("%s %s", modMarker, check)
+		mergeMarker := " "
+		if c.IsMerge {
+			mergeMarker = "M"
+		}
+		status := fmt.Sprintf("%s%s %s", modMarker, mergeMarker, check)
 
 		msg := c.Message
 		if len(msg) > maxMsgLen {
@@ -569,6 +582,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.rollbackModal.Spinner, cmd = m.rollbackModal.Spinner.Update(msg)
 			return m, cmd
+		} else if m.activeModal == ModalBranchSwitch && m.branchModal.State == BranchSwitchSwitching {
+			var cmd tea.Cmd
+			m.branchModal.Spinner, cmd = m.branchModal.Spinner.Update(msg)
+			return m, cmd
 		}
 		return m, nil
 
@@ -606,6 +623,27 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			m.activeModal = ModalNone
+		}
+		return m, nil
+
+	case BranchSwitchFinishedMsg:
+		if m.activeModal == ModalBranchSwitch {
+			if msg.Err != nil {
+				m.branchModal.State = BranchSwitchIdle
+				m.branchModal.ErrorMsg = msg.Err.Error()
+				m.status = "Branch switch failed: " + msg.Err.Error()
+				m.statusOk = false
+			} else {
+				m.currentBranch = msg.Branch
+				m.status = fmt.Sprintf("Switched to branch '%s'", msg.Branch)
+				m.statusOk = true
+				// Reload commits from the new branch
+				if newCommits, err := git.LoadGitCommits(); err == nil {
+					m.commits = newCommits
+					m.updateTable()
+				}
+				m.activeModal = ModalNone
+			}
 		}
 		return m, nil
 
@@ -698,6 +736,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.rollbackModal = NewRollbackModal(backups)
 			m.activeModal = ModalRollback
+		case key.Matches(msg, m.keys.Branch):
+			if !m.isRealRepo {
+				m.status = "Branch switching is not available in mock mode."
+				m.statusOk = false
+				return m, nil
+			}
+			branches, current, err := git.GetLocalBranches()
+			if err != nil || len(branches) == 0 {
+				m.status = "No local branches found."
+				m.statusOk = false
+				return m, nil
+			}
+			// Check if user has unsaved edits
+			hasDirty := false
+			for _, c := range m.commits {
+				if c.AuthorName != c.OriginalName || c.AuthorEmail != c.OriginalMail || !c.Timestamp.Equal(c.OriginalTime) {
+					hasDirty = true
+					break
+				}
+			}
+			m.branchModal = NewBranchSwitchModal(branches, current, hasDirty)
+			m.activeModal = ModalBranchSwitch
 		}
 	}
 
@@ -917,6 +977,69 @@ func (m model) handleModalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
+
+	case ModalBranchSwitch:
+		switch m.branchModal.State {
+		case BranchSwitchSwitching:
+			// Ignore all input while switching
+			return m, nil
+		case BranchSwitchConfirm:
+			switch msg.String() {
+			case "enter", "y", "Y":
+				// Confirmed: proceed with switch
+				branch := m.branchModal.PendingBranch
+				m.branchModal.State = BranchSwitchSwitching
+				return m, tea.Batch(
+					m.branchModal.Spinner.Tick,
+					func() tea.Msg {
+						err := git.SwitchBranch(branch)
+						return BranchSwitchFinishedMsg{Branch: branch, Err: err}
+					},
+				)
+			case "esc", "n", "N":
+				m.branchModal.State = BranchSwitchIdle
+				m.branchModal.PendingBranch = ""
+				return m, nil
+			}
+		default:
+			// Idle state: list navigation
+			switch msg.String() {
+			case "esc", "q":
+				m.activeModal = ModalNone
+				return m, nil
+			case "enter":
+				selected := m.branchModal.List.SelectedItem()
+				if selected != nil {
+					item := selected.(switchBranchItem)
+					if item.name == m.branchModal.CurrentBranch {
+						// Already on this branch, just close
+						m.activeModal = ModalNone
+						return m, nil
+					}
+					if m.branchModal.HasDirtyEdits {
+						// Show confirmation first
+						m.branchModal.PendingBranch = item.name
+						m.branchModal.State = BranchSwitchConfirm
+						return m, nil
+					}
+					// No dirty edits, switch directly
+					branch := item.name
+					m.branchModal.State = BranchSwitchSwitching
+					return m, tea.Batch(
+						m.branchModal.Spinner.Tick,
+						func() tea.Msg {
+							err := git.SwitchBranch(branch)
+							return BranchSwitchFinishedMsg{Branch: branch, Err: err}
+						},
+					)
+				}
+				return m, nil
+			default:
+				var cmd tea.Cmd
+				m.branchModal.List, cmd = m.branchModal.List.Update(msg)
+				return m, cmd
+			}
+		}
 	}
 
 	return m, nil
@@ -1052,12 +1175,27 @@ func (m model) View() string {
 				Render("○ Not Selected")
 		}
 
+		var mergeBadge string
+		if cur.IsMerge {
+			mergeBadge = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#FFFFFF")).
+				Background(lipgloss.Color("#8B5CF6")).
+				Padding(0, 1).
+				Render("⑂ MERGE")
+		}
+
 		shortHash := cur.Hash
 		if len(shortHash) > 7 {
 			shortHash = shortHash[:7]
 		}
 		detailTitle := detailHeaderStyle.Render("Commit " + shortHash)
-		badges := lipgloss.JoinHorizontal(lipgloss.Left, statusBadge, "  ", selBadge)
+		var badges string
+		if mergeBadge != "" {
+			badges = lipgloss.JoinHorizontal(lipgloss.Left, statusBadge, "  ", selBadge, "  ", mergeBadge)
+		} else {
+			badges = lipgloss.JoinHorizontal(lipgloss.Left, statusBadge, "  ", selBadge)
+		}
 
 		var headerBlock string
 		if rightPrintableWidth >= lipgloss.Width(detailTitle)+lipgloss.Width(badges)+4 {
@@ -1086,9 +1224,21 @@ func (m model) View() string {
 			renderDetailRow("Email:", detailValStyle.Render(cur.AuthorEmail), maxValW),
 			renderDetailRow("Date:", detailValStyle.Render(cur.Timestamp.Format("Mon Jan 02, 2006 • 15:04")), maxValW),
 			renderDetailRow("Relative:", detailValStyle.Render(formatRelativeTime(cur.Timestamp)), maxValW),
-			"",
-			lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#A1A1AA")).Render("Message:"),
 		}
+
+		if cur.IsMerge && len(cur.ParentHashes) > 1 {
+			var parentStrs []string
+			for _, p := range cur.ParentHashes {
+				if len(p) > 7 {
+					parentStrs = append(parentStrs, p[:7])
+				} else {
+					parentStrs = append(parentStrs, p)
+				}
+			}
+			details = append(details, renderDetailRow("Parents:", detailValStyle.Render(strings.Join(parentStrs, ", ")), maxValW))
+		}
+
+		details = append(details, "", lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#A1A1AA")).Render("Message:"))
 
 		msgBoxWidth := rightPrintableWidth - 2
 		if msgBoxWidth < 10 {
@@ -1168,6 +1318,7 @@ func (m model) View() string {
 			renderBtn("d", "distribute times"), " • ",
 			renderBtn("w", "apply/dry-run"), " • ",
 			renderBtn("r", "rollback"), " • ",
+			renderBtn("b", "branch"), " • ",
 			renderBtn("q", "quit"),
 		)
 	} else if m.width >= 75 {
@@ -1178,6 +1329,7 @@ func (m model) View() string {
 			renderBtn("d", "times"), " • ",
 			renderBtn("w", "apply"), " • ",
 			renderBtn("r", "rollback"), " • ",
+			renderBtn("b", "branch"), " • ",
 			renderBtn("q", "quit"),
 		)
 	} else {
@@ -1186,6 +1338,7 @@ func (m model) View() string {
 			renderBtn("e", "edit"), " • ",
 			renderBtn("d", "times"), " • ",
 			renderBtn("w", "apply"), " • ",
+			renderBtn("b", "branch"), " • ",
 			renderBtn("q", "quit"),
 		)
 	}
@@ -1220,6 +1373,8 @@ func (m model) View() string {
 			modalView = m.dryRunModal.View(m.width, m.height)
 		case ModalRollback:
 			modalView = m.rollbackModal.View(m.width)
+		case ModalBranchSwitch:
+			modalView = m.branchModal.View(m.width, m.height)
 		}
 
 		return placeOverlay(m.width, m.height, modalView)
@@ -1277,15 +1432,176 @@ func formatRelativeTime(t time.Time) string {
 	return fmt.Sprintf("%d hours ago", int(d.Hours()))
 }
 
-func main() {
-	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error running toolgit: %v\n", err)
-		os.Exit(1)
+type branchPickerItem struct {
+	name      string
+	isCurrent bool
+}
+
+func (i branchPickerItem) Title() string {
+	if i.isCurrent {
+		return i.name + " (current)"
+	}
+	return i.name
+}
+
+func (i branchPickerItem) Description() string {
+	if i.isCurrent {
+		return "currently checked out branch"
+	}
+	return "local branch"
+}
+
+func (i branchPickerItem) FilterValue() string { return i.name }
+
+type branchPickerModel struct {
+	list      list.Model
+	selected  string
+	cancelled bool
+	quitting  bool
+	width     int
+	height    int
+}
+
+func newBranchPickerModel(branches []string, current string) branchPickerModel {
+	items := make([]list.Item, len(branches))
+	for i, b := range branches {
+		items[i] = branchPickerItem{name: b, isCurrent: b == current}
+	}
+
+	delegate := list.NewDefaultDelegate()
+	delegate.Styles.SelectedTitle = delegate.Styles.SelectedTitle.
+		Foreground(lipgloss.Color("#FAFAFA")).
+		Background(lipgloss.Color("#6366F1")).
+		Bold(true)
+	delegate.Styles.SelectedDesc = delegate.Styles.SelectedDesc.
+		Foreground(lipgloss.Color("#E0E7FF")).
+		Background(lipgloss.Color("#6366F1"))
+
+	l := list.New(items, delegate, 64, 16)
+	l.Title = "toolgit • Select Branch"
+	l.SetShowStatusBar(true)
+	l.SetFilteringEnabled(true)
+	l.Styles.Title = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#FAFAFA")).
+		Background(lipgloss.Color("#6366F1")).
+		Padding(0, 1)
+
+	return branchPickerModel{
+		list:     l,
+		selected: current,
 	}
 }
-func Start() error {
+
+func (m branchPickerModel) Init() tea.Cmd {
+	return nil
+}
+
+func (m branchPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.list.SetSize(msg.Width-4, msg.Height-4)
+		return m, nil
+
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "ctrl+c", "q", "esc":
+			m.cancelled = true
+			m.quitting = true
+			return m, tea.Quit
+
+		case "enter":
+			if sel := m.list.SelectedItem(); sel != nil {
+				item := sel.(branchPickerItem)
+				m.selected = item.name
+			}
+			m.quitting = true
+			return m, tea.Quit
+		}
+	}
+
+	var cmd tea.Cmd
+	m.list, cmd = m.list.Update(msg)
+	return m, cmd
+}
+
+func (m branchPickerModel) View() string {
+	if m.quitting {
+		return ""
+	}
+	content := m.list.View()
+	framed := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(highlightColor).
+		Padding(1, 2).
+		Render(content)
+
+	w := m.width
+	h := m.height
+	if w <= 0 {
+		w = 80
+	}
+	if h <= 0 {
+		h = 24
+	}
+	return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, framed)
+}
+
+func runBranchPicker(branches []string, current string) (string, bool) {
+	picker := newBranchPickerModel(branches, current)
+	p := tea.NewProgram(picker, tea.WithAltScreen())
+	finalModel, err := p.Run()
+	if err != nil {
+		return current, false
+	}
+	m := finalModel.(branchPickerModel)
+	if m.cancelled {
+		return "", true
+	}
+	return m.selected, false
+}
+
+func runMainTUI() error {
 	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
 	_, err := p.Run()
 	return err
+}
+
+func Start() error {
+	return StartWithBranch("")
+}
+
+func StartWithBranch(targetBranch string) error {
+	if targetBranch != "" {
+		if git.IsInsideGitRepo() {
+			if err := git.SwitchBranch(targetBranch); err != nil {
+				return fmt.Errorf("failed to switch to branch '%s': %w", targetBranch, err)
+			}
+		}
+		return runMainTUI()
+	}
+
+	if !git.IsInsideGitRepo() {
+		return runMainTUI()
+	}
+
+	branches, current, err := git.GetLocalBranches()
+	if err != nil || len(branches) <= 1 {
+		return runMainTUI()
+	}
+
+	selected, cancelled := runBranchPicker(branches, current)
+	if cancelled {
+		return nil
+	}
+
+	if selected != "" && selected != current {
+		if err := git.SwitchBranch(selected); err != nil {
+			return fmt.Errorf("failed to switch branch to '%s': %w", selected, err)
+		}
+	}
+
+	return runMainTUI()
 }

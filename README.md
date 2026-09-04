@@ -19,6 +19,8 @@ Powered by [Bubble Tea](https://github.com/charmbracelet/bubbletea) and [Lip Glo
 ## Features
 
 - **Adaptive Split-Pane Interface**: Responsive two-column dashboard. The left pane provides an interactive commit table with selection and modification markers; the right pane displays structured metadata (full SHA, author, committer, exact ISO timestamp, relative age, and commit message). Layout automatically recalculates on terminal resize and zoom events without line wrapping or viewport overflow.
+- **Multi-Branch Support & Branch Switching**: Interactive branch selector on launch for repositories with multiple local branches. Launch directly into any branch using `toolgit --branch <name>` (or `-b <name>`), or switch branches in-TUI via <kbd>b</kbd> with fuzzy filtering and dirty-edit safety confirmation.
+- **Topology-Preserving Non-Linear History**: Full merge commit awareness. Reconstructs multi-parent linkage during history rewrites (`git commit-tree -p ...`), displaying distinct indicators (`M` in table, `⑂ MERGE` badge in detail card, and resolved parent SHA lists).
 - **Organic Timestamp Jitter**: Avoids artificial linear spacing and synthetic `:00` seconds. Uses weighted interval distribution and micro-variance to generate natural commit gaps (20 minutes to multiple hours) and realistic seconds.
 - **Multi-Day Workday Partitioning**: Automatically distributes commit batches across a configurable number of distinct active days, respecting daytime working hours (e.g., 09:00 to 17:00) and natural rest intervals.
 - **Batch Author and Committer Editing**: Modify author name and email address for a single commit or in batch across all selected commits.
@@ -90,7 +92,12 @@ Compiled standalone binaries for Windows (`amd64` and `arm64`) are published aut
 Open any terminal inside a Git repository and launch the tool:
 
 ```bash
+# Interactive mode (prompts with branch picker if multiple branches exist):
 toolgit
+
+# Directly launch into a specific branch:
+toolgit --branch feature-auth
+toolgit -b main
 ```
 
 > [!NOTE]
@@ -121,12 +128,17 @@ toolgit
 ### 4. Reviewing and Applying Changes
 - Press <kbd>w</kbd> to open the Dry-Run Review modal.
 - Review the side-by-side diff detailing original vs. proposed commit metadata.
-- Press <kbd>Enter</kbd> to confirm. `toolgit` creates a backup branch, writes the new commit objects via Git plumbing, and updates the branch reference.
+- Press <kbd>Enter</kbd> to confirm. `toolgit` creates a backup branch, writes the new commit objects via Git plumbing, and updates the branch reference. Multi-parent merge topology is preserved automatically.
 
 ### 5. Rollback and History Restoration
 - Press <kbd>r</kbd> to open the Rollback menu.
 - A list of previous backup branches (`toolgit-backup-<timestamp>`) will be shown.
 - Select a backup branch and press <kbd>Enter</kbd> to restore `HEAD` to that snapshot.
+
+### 6. Branch Switching
+- If the repository has multiple local branches, `toolgit` displays an interactive fuzzy picker upon launch.
+- Inside the TUI, press <kbd>b</kbd> at any time to open the branch switcher modal with fuzzy search.
+- If you have unapplied in-memory edits, `toolgit` guards your work with a confirmation dialog before switching.
 
 ---
 
@@ -141,6 +153,7 @@ toolgit
 | <kbd>e</kbd> | Edit Author | Open Author Name and Email editor modal |
 | <kbd>d</kbd> | Time Picker | Open Time Distribution and Active Days modal |
 | <kbd>t</kbd> | Quick Workday | Distribute selected commits between 09:00 and 17:00 today |
+| <kbd>b</kbd> | Switch Branch | Open in-TUI branch switcher modal with fuzzy search |
 | <kbd>w</kbd> | Dry-Run Review | Open side-by-side diff review and confirm rewrite |
 | <kbd>r</kbd> | Rollback Menu | Browse and restore safety backup branches |
 | <kbd>q</kbd> / <kbd>Esc</kbd> | Back / Quit | Dismiss active modal or exit application |
