@@ -1,194 +1,251 @@
-# 🛠️ toolgit
+# toolgit
 
-<p align="center">
-  <strong>Fast, non-destructive Terminal User Interface (TUI) for safely inspecting, modifying, and batch-distributing Git commit metadata.</strong>
-</p>
+Fast, non-destructive Terminal User Interface (TUI) for inspecting, modifying, and batch-distributing Git commit metadata.
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Language-Go%201.21+-00ADD8?style=flat-square&logo=go" alt="Go Version" />
-  <img src="https://img.shields.io/badge/TUI-Bubble%20Tea-7D56F4?style=flat-square" alt="Bubble Tea" />
-  <img src="https://img.shields.io/badge/Styling-Lip%20Gloss-04B575?style=flat-square" alt="Lip Gloss" />
-  <img src="https://img.shields.io/badge/Safety-Automated%20Backups-F59E0B?style=flat-square" alt="Safety Backups" />
-</p>
+[![CI](https://github.com/abhaysinh8/toolgit/actions/workflows/ci.yml/badge.svg)](https://github.com/abhaysinh8/toolgit/actions/workflows/ci.yml)
+[![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat-square&logo=go)](https://go.dev/)
+[![Bubble Tea](https://img.shields.io/badge/TUI-Bubble%20Tea-7D56F4?style=flat-square)](https://github.com/charmbracelet/bubbletea)
+[![Lip Gloss](https://img.shields.io/badge/Style-Lip%20Gloss-04B575?style=flat-square)](https://github.com/charmbracelet/lipgloss)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-blue?style=flat-square)](#installation)
 
 ---
 
-## 📖 Table of Contents
-- [✨ Key Features](#-key-features)
-- [⌨️ Keyboard Shortcuts](#️-keyboard-shortcuts)
-- [🚀 Quick Start & Installation](#-quick-start--installation)
-- [🌿 Organic Time Jitter & Active Days](#-organic-time-jitter--active-days)
-- [🛡️ Safety & Git Plumbing Engine](#️-safety--git-plumbing-engine)
-- [🧪 Running the Test Suite](#-running-the-test-suite)
-- [📂 Project Architecture](#-project-architecture)
-- [📚 Deep-Dive Documentation](#-deep-dive-documentation)
+## Overview
+
+`toolgit` is an interactive terminal application designed to inspect, edit, and reorganize Git commit history without the overhead and risks associated with interactive rebase (`git rebase -i`) or external filter scripts.
+
+Powered by [Bubble Tea](https://github.com/charmbracelet/bubbletea) and [Lip Gloss](https://github.com/charmbracelet/lipgloss), `toolgit` provides an adaptive split-pane terminal dashboard for navigating commit logs, editing author and committer metadata in batch, distributing timestamps across realistic active workdays, and safely rewriting commit graphs via low-level Git plumbing. Every rewrite automatically creates an isolated backup branch, allowing instant one-key rollbacks.
+
+## Features
+
+- **Adaptive Split-Pane Interface**: Responsive two-column dashboard. The left pane provides an interactive commit table with selection and modification markers; the right pane displays structured metadata (full SHA, author, committer, exact ISO timestamp, relative age, and commit message). Layout automatically recalculates on terminal resize and zoom events without line wrapping or viewport overflow.
+- **Organic Timestamp Jitter**: Avoids artificial linear spacing and synthetic `:00` seconds. Uses weighted interval distribution and micro-variance to generate natural commit gaps (20 minutes to multiple hours) and realistic seconds.
+- **Multi-Day Workday Partitioning**: Automatically distributes commit batches across a configurable number of distinct active days, respecting daytime working hours (e.g., 09:00 to 17:00) and natural rest intervals.
+- **Batch Author and Committer Editing**: Modify author name and email address for a single commit or in batch across all selected commits.
+- **Time Range Presets**: Built-in presets for common intervals ("Today Workday", "Yesterday Workday", "Past 3 Hours", "Past 8 Hours") alongside custom date and time range inputs.
+- **Side-by-Side Dry-Run Review**: Visual diff preview displaying original commit metadata against proposed modifications before changes are written to the repository.
+- **Non-Destructive Git Plumbing**: Leverages direct `git commit-tree` and `git update-ref` calls. Bypasses the working tree and index entirely, ensuring uncommitted files remain untouched.
+- **Automated Safety Backups and Rollback**: Creates an automated snapshot branch (`toolgit-backup-<timestamp>`) before any rewrite. An integrated rollback menu allows instant restoration of previous commit states.
+- **Mock Mode**: Automatically loads simulated commit data when executed outside a Git repository, allowing full TUI evaluation without repository setup.
+
+## Table of Contents
+
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Usage Guide](#usage-guide)
+- [Keyboard Shortcuts](#keyboard-shortcuts)
+- [Architecture and Safety](#architecture-and-safety)
+- [Testing](#testing)
+- [Repository Structure](#repository-structure)
+- [Additional Documentation](#additional-documentation)
 
 ---
 
-## ✨ Key Features
-
-| Feature | Description |
-|---|---|
-| 🖥️ **Adaptive Split-Pane** | Mathematical zero-scroll layout engine with dynamic zoom in/out (<kbd>Ctrl + +</kbd>/<kbd>Ctrl + -</kbd>) support. **Left (~44%)**: Dynamic responsive table with selection markers (`[✓]`) and edit flags (`✎`). **Right (~56%)**: Adaptive metadata card showing SHA, Author, Email, Timestamps, Relative Age, and bounded message box. |
-| 🌿 **Organic Human Jitter** | Eliminates robotic mathematical steps and identical `:00` seconds with natural gap variance and randomized seconds. |
-| 📅 **Multi-Day Active Days** | Partition commits across a chosen number of active days (e.g. 22 commits over 10 distinct days) during daytime hours. |
-| 👤 **Interactive Author Editor** | Edit Author Name and Email for single commits or in batch across all selected commits with live form navigation. |
-| ⏳ **Smart Time Range Picker** | Dropdown radio presets (*"Today Workday"*, *"Yesterday Workday"*, *"Past 3h"*, *"Past 8h"*, *"Custom Range..."*) with real-time active days calculation. |
-| 🛡️ **Non-Destructive Dry-Run** | Side-by-side diff inspection with **automatic safety backup branches** (`toolgit-backup-<timestamp>`) before any rewrite. |
-| 🔄 **Async Rollback Engine** | Menu of previous safety backups with animated async loading overlay when restoring history. |
-| ⚡ **Live Dev Toolchain** | Fast build script (`scripts/build/update.ps1`) and file watcher (`scripts/dev/watch.ps1`) for automatic hot rebuilding on save. |
-
----
-
-## ⌨️ Keyboard Shortcuts
-
-| Shortcut | Action | Description |
-|---|---|---|
-| <kbd>j</kbd> / <kbd>↓</kbd> | **Navigate Down** | Move cursor down with automatic windowed scrolling |
-| <kbd>k</kbd> / <kbd>↑</kbd> | **Navigate Up** | Move cursor up with automatic windowed scrolling |
-| <kbd>Space</kbd> | **Toggle Select** | Select or deselect the active commit for batch actions |
-| <kbd>a</kbd> | **Select All** | Toggle selection across all commits in the repository |
-| <kbd>e</kbd> | **Edit Author** | Open the interactive Author Name & Email editor modal |
-| <kbd>d</kbd> | **Time Picker** | Open the Time Distribution & Active Days picker modal |
-| <kbd>t</kbd> | **Quick 9-to-5** | Quick-distribute selected commits between 09:00 AM – 05:00 PM today |
-| <kbd>w</kbd> | **Dry-Run Review** | Open the side-by-side diff review modal and confirm rewrite |
-| <kbd>r</kbd> | **Rollback Menu** | Open safety rollback menu to restore a previous backup branch |
-| <kbd>q</kbd> / <kbd>Esc</kbd> | **Quit / Back** | Close active modal or quit the application |
-| <kbd>Ctrl+C</kbd> | **Force Exit** | Instant clean process shutdown |
-
----
-
-## 🚀 Quick Start & Installation
+## Installation
 
 ### Prerequisites
-- [Go 1.21+](https://go.dev/dl/)
-- [Git](https://git-scm.com/) (available in system PATH)
 
-### 1. Build and Install Globally
-Run the automated update script to test, compile, and register `toolgit` into your terminal PATH:
+- [Go 1.21](https://go.dev/dl/) or newer
+- [Git](https://git-scm.com/) installed and available in your system `PATH`
+
+### Build from Source
+
+```bash
+# Clone the repository
+git clone https://github.com/abhaysinh8/toolgit.git
+cd toolgit
+
+# Compile binary with stripped symbols
+go build -ldflags "-s -w" -o toolgit.exe ./cmd/toolgit
+```
+
+### Install with Go
+
+```bash
+go install ./cmd/toolgit
+```
+
+### Windows Automated Installer
+
+The repository includes an installer script that verifies the environment, executes the test suite, builds an optimized binary, and registers the binary directory in your user `PATH`:
 
 ```powershell
-# In PowerShell:
+# PowerShell
 .\scripts\build\update.ps1
 ```
 
-*(Or in Windows Command Prompt: `.\scripts\build\update.cmd`)*
+```cmd
+:: Command Prompt
+.\scripts\build\update.cmd
+```
 
-### 2. Launch Anywhere
-Once installed, open any terminal in any Git repository and run:
+### Pre-built Releases
+
+Compiled standalone binaries for Windows (`amd64` and `arm64`) are published automatically on the [GitHub Releases](https://github.com/abhaysinh8/toolgit/releases) page for each tagged release.
+
+---
+
+## Quick Start
+
+Open any terminal inside a Git repository and launch the tool:
 
 ```bash
 toolgit
 ```
 
-> [!TIP]
-> If run outside a Git repository, `toolgit` automatically launches in **Mock Mode** (`🧪 Mock Mode`), allowing you to test all TUI features and algorithms safely without modifying any files.
+> [!NOTE]
+> If run outside a Git repository, `toolgit` launches in **Mock Mode**, providing sample commits to explore the user interface, keybindings, and modal dialogues safely without modifying any files.
 
 ---
 
-## 🕹️ Basic Usage Tutorial
+## Usage Guide
 
-1. **Select Commits:** Use <kbd>↑</kbd> and <kbd>↓</kbd> (or <kbd>j</kbd>/<kbd>k</kbd>) to navigate the commit list. Press <kbd>Space</kbd> to select individual commits for batch modification, or <kbd>a</kbd> to toggle selection of all commits.
-2. **Edit Author Metadata:** Press <kbd>e</kbd> to open the Author Editor modal. Here you can standardize the name and email for the selected commits.
-3. **Time Shift (Jitter):** Press <kbd>d</kbd> to open the Time & Days Picker. Choose a predefined preset (e.g., "Today Workday") or enter custom dates. This will recalculate the timestamps for the selected commits using the Organic Jitter algorithm.
-4. **Dry-Run & Commit:** Press <kbd>w</kbd> to enter Dry-Run mode. A side-by-side diff will appear displaying the original vs. rewritten commit graph. Confirm by typing "yes" to safely write the changes via Git plumbing.
+### 1. Navigation and Selection
+- Use <kbd>j</kbd> / <kbd>k</kbd> or <kbd>Down</kbd> / <kbd>Up</kbd> arrows to navigate the commit table.
+- Press <kbd>Space</kbd> to toggle selection for individual commits.
+- Press <kbd>a</kbd> to toggle selection across all commits in the repository.
 
----
+### 2. Editing Author Metadata
+- Select one or more commits and press <kbd>e</kbd> to open the Author Editor modal.
+- Enter the updated Author Name and Email Address.
+- Press <kbd>Enter</kbd> to apply the values. Modified commits are flagged with an edit indicator in the table.
 
-## 📦 Release & Packaging Workflow
+### 3. Timestamp Distribution
+- Select the target commits.
+- Press <kbd>t</kbd> to quick-distribute selected commits across standard workday hours (09:00 to 17:00) for the current day.
+- Or press <kbd>d</kbd> to open the Time Distribution modal:
+  - Choose a preset (e.g., "Today Workday", "Yesterday Workday", "Past 3h", "Past 8h").
+  - Or select "Custom Range..." to define specific start and end timestamps along with the target number of active days.
+  - Commits are redistributed using organic jitter, ensuring strict chronological monotonicity and randomized second offsets.
 
-`toolgit` includes an automated GitHub Actions pipeline (`.github/workflows/release.yml`) for Windows distribution.
+### 4. Reviewing and Applying Changes
+- Press <kbd>w</kbd> to open the Dry-Run Review modal.
+- Review the side-by-side diff detailing original vs. proposed commit metadata.
+- Press <kbd>Enter</kbd> to confirm. `toolgit` creates a backup branch, writes the new commit objects via Git plumbing, and updates the branch reference.
 
-To trigger a new release:
-1. Commit your changes and tag the commit with a version number (e.g., `v1.0.0`).
-2. Push the tag to GitHub: `git push origin v1.0.0`
-
-GitHub Actions will automatically:
-- Build optimized, stripped binaries (`-s -w`) for Windows (both `amd64` and `arm64`).
-- Create a new GitHub Release.
-- Upload the compiled binaries as release assets and automatically generate release notes.
-
-*(Alternatively, for local packaging, you can run the included `.\scripts\build\release.ps1` script to cross-compile to a local `/release` folder).*
-
----
-
-## 🌿 Organic Time Jitter & Active Days
-
-Unlike naive linear interpolation ($\Delta t = \frac{\text{End} - \text{Start}}{N - 1}$) which creates an artificial grid of commits landing at identical seconds and midnight hours, `toolgit` uses **Organic Developer Simulation**:
-
-```mermaid
-graph LR
-    A[Start: Apr 02] --> B[Day 1: 3 commits<br/>09:24, 11:42, 16:15]
-    B --> C[Day 2: 2 commits<br/>14:08, 17:30]
-    C --> D[Day 5: 4 commits<br/>10:11, 11:04, 15:48, 18:02]
-    D --> E[...]
-    E --> F[End: Apr 24]
-```
-
-- **Natural Gaps:** Intervals between commits vary dynamically from 20 minutes to 2+ hours.
-- **Randomized Seconds:** Timestamps land on realistic natural seconds (e.g. `14:28:43`).
-- **Active Days Constraint:** Spreads commits across your specified number of active days, preserving realistic coding days and rest intervals.
+### 5. Rollback and History Restoration
+- Press <kbd>r</kbd> to open the Rollback menu.
+- A list of previous backup branches (`toolgit-backup-<timestamp>`) will be shown.
+- Select a backup branch and press <kbd>Enter</kbd> to restore `HEAD` to that snapshot.
 
 ---
 
-## 🛡️ Safety & O(1) Git Plumbing Engine
+## Keyboard Shortcuts
 
-`toolgit` does **not** use fragile interactive git rebases. It leverages direct **Git plumbing** commands optimized into an **$O(1)$ native PowerShell process runspace**:
+| Key | Action | Description |
+|---|---|---|
+| <kbd>j</kbd> / <kbd>↓</kbd> | Navigate Down | Move cursor down with automatic windowed scrolling |
+| <kbd>k</kbd> / <kbd>↑</kbd> | Navigate Up | Move cursor up with automatic windowed scrolling |
+| <kbd>Space</kbd> | Toggle Selection | Select or deselect the active commit |
+| <kbd>a</kbd> | Select All | Toggle selection across all commits |
+| <kbd>e</kbd> | Edit Author | Open Author Name and Email editor modal |
+| <kbd>d</kbd> | Time Picker | Open Time Distribution and Active Days modal |
+| <kbd>t</kbd> | Quick Workday | Distribute selected commits between 09:00 and 17:00 today |
+| <kbd>w</kbd> | Dry-Run Review | Open side-by-side diff review and confirm rewrite |
+| <kbd>r</kbd> | Rollback Menu | Browse and restore safety backup branches |
+| <kbd>q</kbd> / <kbd>Esc</kbd> | Back / Quit | Dismiss active modal or exit application |
+| <kbd>Ctrl+C</kbd> | Force Exit | Immediately terminate process |
+
+---
+
+## Architecture and Safety
+
+### Non-Destructive Git Plumbing Engine
+
+`toolgit` avoids high-level interactive rebase operations that manipulate the working tree or index. Instead, it interacts directly with the Git object store using plumbing commands:
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant User as 👤 User
-    participant Tool as 🛠️ toolgit
-    participant PS as ⚡ PowerShell
-    participant Git as 📦 Git Plumbing
+    participant User as User
+    participant Tool as toolgit
+    participant Engine as Script Batch
+    participant Git as Git Engine
 
-    User->>Tool: Press 'w' (Review Dry-Run)
+    User->>Tool: Request Rewrite (w)
     Tool-->>User: Display Side-by-Side Metadata Diff
-    User->>Tool: Confirm Rewrite ('Enter' / 'y')
-    Tool->>Git: Create Backup (git branch toolgit-backup-<ts>)
-    Tool->>PS: Execute Dynamic Script (O(1) Process Spawn)
-    PS->>Git: Recreate Commit Trees (git commit-tree)
-    PS->>Git: Atomically Update HEAD (git update-ref)
-    Tool-->>User: Success Confirmation
+    User->>Tool: Confirm Rewrite
+    Tool->>Git: Create Backup Branch (git branch toolgit-backup-<timestamp>)
+    Tool->>Engine: Generate Plumbing Operations
+    Engine->>Git: Synthesize Tree Objects (git commit-tree)
+    Engine->>Git: Atomically Update Ref (git update-ref refs/heads/<branch>)
+    Tool-->>User: Report Success and Updated HEAD SHA
 ```
 
-> [!IMPORTANT]
-> **Working Tree Safety:** Git plumbing updates commit graph references directly without touching files on disk. Your working tree remains clean and untouched.
+1. **Working Tree Isolation**: All new commit objects are synthesized directly in the Git repository database via `git commit-tree`. Unstaged changes, staged index entries, and untracked files are never touched.
+2. **Atomic Reference Updates**: Upon computing the revised commit DAG, the branch reference is updated atomically via `git update-ref`.
+3. **Pre-Rewrite Safety Backups**: Prior to executing any ref update, `toolgit` captures the current branch state into a timestamped snapshot (`refs/heads/toolgit-backup-<timestamp>`).
+
+### Organic Timestamp Simulation
+
+Linear interpolation produces unnatural commit artifacts (fixed minute steps, identical `:00` seconds, and commits landing during non-work hours). `toolgit` implements an organic simulation algorithm:
+
+- **Dynamic Gap Sizing**: Intervals between commits vary dynamically based on normalized random weights ($w_i \in [0.5, 1.5]$).
+- **Randomized Seconds**: Second values are randomized across natural ranges, eliminating robotic uniform seconds.
+- **Active Days Constraint**: Commits are partitioned across a specified count of distinct workdays during daytime hours, leaving natural multi-day rest periods between active coding sessions.
+- **Strict Monotonicity**: Preserves the chronological invariant $t_{i+1} > t_i$, preventing negative time intervals across the commit graph.
 
 ---
 
-## 🧪 Running the Test Suite
+## Testing
 
-Unit, integration, and end-to-end repository workflow tests ensure mathematical accuracy, monotonicity, and plumbing safety:
+The test suite includes unit tests, time distribution mathematical invariant checks, and end-to-end repository rewrite workflows:
 
 ```bash
+# Run all tests
 go test -v ./...
+
+# Run fast unit tests only
+go test -v ./internal/...
+```
+
+### Hot Reloading in Development
+
+A PowerShell file watcher script is included to recompile and test on file save:
+
+```powershell
+.\scripts\dev\watch.ps1
+```
+
+### Packaging and Release Automation
+
+Releases are managed via GitHub Actions (`.github/workflows/release.yml`). Pushing a semantic version tag triggers cross-compilation for Windows (`amd64` and `arm64`) and publishes assets to GitHub Releases:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+To cross-compile locally:
+
+```powershell
+.\scripts\build\release.ps1
 ```
 
 ---
 
-## 📂 Project Architecture
+## Repository Structure
 
 ```
 toolgit/
-├── cmd/toolgit/
-│   └── main.go           # Minimal application entry point
+├── cmd/
+│   └── toolgit/          # Application entry point
 ├── internal/
-│   ├── app/              # TUI components, state machines, and organic distribution engine
-│   ├── core/             # Shared domain types (CommitState, DiffItem)
-│   └── git/              # Git plumbing, commit loader, backup, and rewrite engine
+│   ├── app/              # TUI components, state machines, views, and time distribution
+│   ├── core/             # Shared domain models (CommitState, DiffItem)
+│   └── git/              # Git plumbing, log parsing, backup, and rewrite engine
 ├── scripts/
-│   ├── build/            # PowerShell/Batch build and global installer scripts
-│   └── dev/              # Background file watchers for hot reloading
-├── docs/                 # Internal architecture and deep-dive design documents
+│   ├── build/            # PowerShell and Batch build/install scripts
+│   └── dev/              # Development watcher scripts
+├── docs/                 # Architectural specifications and design proposals
 ├── go.mod                # Go module dependencies
-├── README.md             # Project documentation
+└── README.md             # Project documentation
 ```
 
 ---
 
-## 📚 Deep-Dive Documentation
+## Additional Documentation
 
-- 👉 **[HOW_IT_WORKS.md](./docs/HOW_IT_WORKS.md)**: Mathematical models for organic jitter, Git plumbing architecture, and viewport windowing algorithms.
-- 👉 **[MULTI_AUTHOR_PROPOSAL.md](./docs/MULTI_AUTHOR_PROPOSAL.md)**: Design proposal for team contributor rosters, author initials badges, pair-programming distribution, and GitHub `Co-authored-by:` trailers.
+- [HOW_IT_WORKS.md](./docs/HOW_IT_WORKS.md) - Deep-dive into internal mechanics, mathematical distribution equations, and viewport windowing algorithms.
+- [MULTI_AUTHOR_PROPOSAL.md](./docs/MULTI_AUTHOR_PROPOSAL.md) - Design proposal for contributor rosters, pair-programming distribution, and `Co-authored-by` trailer support.
+

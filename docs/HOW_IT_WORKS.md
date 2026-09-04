@@ -1,49 +1,50 @@
-# 🔍 How `toolgit` Works: Architecture & Internal Mechanics
+# Architecture and Internal Mechanics
 
 This guide provides a comprehensive breakdown of `toolgit`'s internal architecture, mathematical distribution models, Git plumbing mechanics, and event loop lifecycle.
 
 ---
 
-## 📖 Table of Contents
-1. [🏗️ Model-View-Update (MVU) Architecture](#️-1-model-view-update-mvu-architecture)
-2. [🧭 Git Discovery & Delimited Stream Parsing](#-2-git-discovery--delimited-stream-parsing)
-3. [🌿 Organic Time Jitter & Active Days Engine](#-3-organic-time-jitter--active-days-engine)
-4. [🖥️ Viewport Windowing & Layout System](#️-4-viewport-windowing--layout-system)
-5. [🛡️ Non-Destructive Git Plumbing Engine](#️-5-non-destructive-git-plumbing-engine)
-6. [🪟 Interactive Modal System](#-6-interactive-modal-system)
-7. [💻 Development Toolchain & PATH Registration](#-7-development-toolchain--path-registration)
+## Table of Contents
+
+1. [Model-View-Update (MVU) Architecture](#1-model-view-update-mvu-architecture)
+2. [Git Discovery and Delimited Stream Parsing](#2-git-discovery-and-delimited-stream-parsing)
+3. [Organic Time Jitter and Active Days Engine](#3-organic-time-jitter-and-active-days-engine)
+4. [Responsive Layout and Zero-Scroll Engine](#4-responsive-layout-and-zero-scroll-engine)
+5. [Non-Destructive Git Plumbing Engine](#5-non-destructive-git-plumbing-engine)
+6. [Interactive Modal System](#6-interactive-modal-system)
+7. [Development Toolchain and PATH Registration](#7-development-toolchain-and-path-registration)
 
 ---
 
-## 🏗️ 1. Model-View-Update (MVU) Architecture
+## 1. Model-View-Update (MVU) Architecture
 
 `toolgit` is built on [Bubble Tea](https://github.com/charmbracelet/bubbletea), following the Elm-style Model-View-Update paradigm:
 
 ```mermaid
 graph TD
-    subgraph EventLoop["🔄 Bubble Tea Event Loop"]
-        Input["⌨️ Keypress / Terminal Resize"] --> Update["⚙️ Update(msg)"]
-        Update --> State["📦 State Model Mutation"]
-        State --> View["🎨 View()"]
-        View --> Render["🖥️ Terminal ANSI Screen"]
+    subgraph EventLoop["Bubble Tea Event Loop"]
+        Input["Keypress / Terminal Resize"] --> Update["Update(msg)"]
+        Update --> State["State Model Mutation"]
+        State --> View["View()"]
+        View --> Render["Terminal Screen"]
     end
 
     subgraph Views["View Routing"]
-        View --> MainSplit["Split-Pane Dashboard<br/>(48% Commits | 52% Details)"]
+        View --> MainSplit["Split-Pane Dashboard<br/>(44% Commits | 56% Details)"]
         View --> ModalOverlay["Centered Modal Dialogs<br/>(Author / Time / Dry-Run)"]
     end
 ```
 
 ---
 
-## 🧭 2. Git Discovery & Delimited Stream Parsing
+## 2. Git Discovery and Delimited Stream Parsing
 
 When `toolgit` initializes, it inspects the working directory:
 
 ```mermaid
 sequenceDiagram
-    participant CLI as 🛠️ toolgit
-    participant Git as 📦 Local Git Engine
+    participant CLI as toolgit
+    participant Git as Local Git Engine
 
     CLI->>Git: git rev-parse --is-inside-work-tree
     alt In Git Repository
@@ -55,7 +56,7 @@ sequenceDiagram
         CLI->>CLI: Parse into []*CommitState
     else Not in Git Repository
         Git-->>CLI: false
-        CLI->>CLI: Load 5 mock commits with [🧪 Mock Mode] badge
+        CLI->>CLI: Load 5 mock commits with Mock Mode indicator
     end
 ```
 
@@ -66,7 +67,7 @@ sequenceDiagram
 
 ---
 
-## 🌿 3. Organic Time Jitter & Active Days Engine
+## 3. Organic Time Jitter and Active Days Engine
 
 Naive distribution ($\Delta t = \frac{T_{\text{end}} - T_{\text{start}}}{N - 1}$) produces robotic `:00` seconds and slips into midnight sleep hours. `toolgit` replaces this with **Organic Developer Simulation**:
 
@@ -115,18 +116,18 @@ graph LR
 
 ---
 
-## 🖥️ 4. Responsive Layout & Zero-Scroll Engine
+## 4. Responsive Layout and Zero-Scroll Engine
 
 `toolgit` features an adaptive, mathematical split-pane layout engine designed to prevent terminal scrollback contamination, line wrapping, or visual distortion across any terminal dimensions or font zoom levels.
 
 ```mermaid
 graph TD
-    Term["🖥️ Terminal Dimensions (W x H)"] --> Detect["`term.GetSize(os.Stdout.Fd())`"]
-    Resize["🔍 Zoom In / Out / Resize (tea.WindowSizeMsg)"] --> Detect
-    Detect --> Calc["📐 Proportional Chrome & Printable Space Allocation"]
+    Term["Terminal Dimensions (W x H)"] --> Detect["term.GetSize(os.Stdout.Fd())"]
+    Resize["Zoom / Resize (tea.WindowSizeMsg)"] --> Detect
+    Detect --> Calc["Proportional Chrome and Space Allocation"]
     Calc --> Left["Left Pane (44%): Table Viewport<br/>msgCol = leftPrintable - 16"]
     Calc --> Right["Right Pane (56%): Adaptive Details Card<br/>Responsive SHA & Bounded Message"]
-    Left & Right --> Screen["🖼️ Strict H-Line Frame Assembly (Zero-Scroll Guarantee)"]
+    Left & Right --> Screen["Strict H-Line Frame Assembly (Zero-Scroll Guarantee)"]
 ```
 
 ### A. Mathematical Dimension Invariants
@@ -143,11 +144,11 @@ To guarantee that the terminal emulator buffer never scrolls vertically (which c
 
 ### B. Dynamic Table Resizing (`bubbles/table`)
 Unlike static tables, `toolgit` dynamically resizes the table viewport and columns inside `resizeUI()`:
-- **Status Column:** 3 chars (`✎ ✓`).
+- **Status Column:** 3 chars (`* v`).
 - **Hash Column:** 7 chars (`8fb0c5f`).
 - **Message Column:** Dynamically scaled:
   $$W_{\text{msgCol}} = W_{\text{leftPrintable}} - 16$$
-- **Header Separator Fit:** Table total width is strictly clamped to $W_{\text{leftPrintable}}$, preventing the table header separator line (`──────`) from wrapping onto a second row.
+- **Header Separator Fit:** Table total width is strictly clamped to $W_{\text{leftPrintable}}$, preventing the table header separator line from wrapping onto a second row.
 
 ### C. Adaptive Right-Pane Cards
 - **Dynamic SHA Length:** Displays full 40-char SHA on wide screens ($\ge 56\text{ cols}$ available); cleanly truncates to short SHA on narrow or zoomed-in displays.
@@ -168,57 +169,58 @@ This invariant guarantees that navigation (<kbd>j</kbd>/<kbd>k</kbd>/<kbd>↑</k
 
 ---
 
-## 🛡️ 5. Non-Destructive O(1) Git Plumbing Engine
+## 5. Non-Destructive Git Plumbing Engine
 
 `toolgit` executes metadata rewrites directly through Git's low-level object database, optimized into an **$O(1)$ Process Execution Pipeline**:
 
 ```mermaid
 graph TD
-    A["1. Create Safety Backup<br/><code>git branch toolgit-backup-&lt;ts&gt;</code>"] --> B["2. Build Dynamic Script<br/>(Strings Builder in Go)"]
-    B --> C["3. O(1) PowerShell Loop<br/><code>$PARENT = git commit-tree ...</code>"]
-    C --> D["4. Environment Overrides<br/><code>$env:GIT_AUTHOR_NAME=...</code>"]
-    D --> E["5. Atomically Move Ref<br/><code>git update-ref HEAD &lt;new_head_hash&gt;</code>"]
+    A["1. Create Safety Backup<br/><code>git branch toolgit-backup-&lt;timestamp&gt;</code>"] --> B["2. Build Dynamic Script<br/>(Strings Builder in Go)"]
+    B --> C["3. Single Script Execution<br/><code>git commit-tree ...</code>"]
+    C --> D["4. Environment Overrides<br/><code>GIT_AUTHOR_NAME=...</code>"]
+    D --> E["5. Atomically Move Ref<br/><code>git update-ref refs/heads/&lt;branch&gt;</code>"]
 ```
 
-### ⚡ Batch Execution Architecture
-Instead of spawning **2 `git` processes per commit** via Go's `exec.Command` (which is slow on Windows), `toolgit` dynamically builds a single native PowerShell script payload and executes it completely within a **single background process runspace**.
+### Batch Execution Architecture
+Instead of spawning **2 `git` processes per commit** via individual process calls (which introduces overhead on Windows), `toolgit` dynamically builds a single script payload and executes it completely within a single process runspace.
 
-- **Multi-Line Messages:** Uses PowerShell Here-Strings (`@"\n ... \n"@`) to perfectly reconstruct commit bodies without variable escaping breaks.
-- **Immediate Failure Traps:** Appends `$LASTEXITCODE` checks natively to short-circuit upon any `commit-tree` faults.
+- **Multi-Line Messages:** Uses Here-Strings to accurately reconstruct commit bodies without variable escaping issues.
+- **Immediate Failure Traps:** Checks exit codes natively to short-circuit upon any `commit-tree` errors.
 
 > [!NOTE]
 > **Zero Working Tree Risk:** `git commit-tree` creates new commit objects without performing a checkout. Uncommitted files or working tree changes on disk are never touched.
 
 ---
 
-## 🪟 6. Interactive Modal System
+## 6. Interactive Modal System
 
 Modals render as centered floating cards using `lipgloss.Place`:
 
-1. **Author & Email Editor (<kbd>e</kbd>)**:
+1. **Author and Email Editor (<kbd>e</kbd>)**:
    - Live form navigation with <kbd>Tab</kbd> / <kbd>Shift+Tab</kbd>.
    - Supports single commit or batch updates across all selected commits.
-2. **Time & Active Days Picker (<kbd>d</kbd>)**:
-   - Interactive dropdown radio presets (*Today Workday*, *Yesterday Workday*, *Past 3h*, *Past 8h*, *Custom Range...*).
+2. **Time and Active Days Picker (<kbd>d</kbd>)**:
+   - Interactive dropdown presets (Today Workday, Yesterday Workday, Past 3h, Past 8h, Custom Range).
    - Custom Range mode with Start Date, End Date, and Active Days fields.
    - Dynamic real-time preview of calendar days and active days distribution.
 3. **Dry-Run Diff Review (<kbd>w</kbd>)**:
-   - Color-coded side-by-side metadata diff table (`✎` modified flags in green/pink).
+   - Side-by-side metadata diff table with modification flags.
    - Safety backup notice and confirmation guard.
-   - Asynchronous background execution with live loading spinner feedback.
+   - Asynchronous background execution with live loading indicator.
 4. **Safety Rollback (<kbd>r</kbd>)**:
    - Menu of timestamped automatic safety backup branches (`toolgit-backup-<timestamp>`).
-   - Restores branch synchronously inside a background goroutine with visual loading spinner.
+   - Restores branch synchronously inside a background goroutine with visual loading feedback.
 
 ---
 
-## 💻 7. Development Toolchain & PATH Registration
+## 7. Development Toolchain and PATH Registration
 
 | Script | Command | Purpose |
 |---|---|---|
-| **Fast Build & Update** | `.\scripts\build\update.ps1` | Runs test suite, compiles `toolgit.exe`, and updates global `go install` |
+| **Fast Build and Update** | `.\scripts\build\update.ps1` | Runs test suite, compiles `toolgit.exe`, and updates global `go install` |
 | **Skip-Tests Build** | `.\scripts\build\update.ps1 -SkipTests` | Rapid local compile and install |
 | **File Watcher** | `.\scripts\dev\watch.ps1` | Auto-detects `.go` file saves and updates global CLI in real time |
 | **Batch Helper** | `.\scripts\build\update.cmd` | Command Prompt wrapper for Windows CMD |
 
-Global CLI executable is registered at `%GOPATH%\bin\toolgit.exe` and is accessible anywhere from your system terminal.
+The global CLI executable is registered at `%GOPATH%\bin\toolgit.exe` and is accessible anywhere from your system terminal.
+
